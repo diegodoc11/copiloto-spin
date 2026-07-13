@@ -1,0 +1,4 @@
+PyAudioWPatch
+websockets>=15,<16
+anthropic>=0.106.0
+httpx

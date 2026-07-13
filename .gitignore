@@ -1,0 +1,21 @@
+# ── Claves y secretos (JAMÁS se suben) ──────────────────────────────
+.env
+
+# ── Datos privados de llamadas reales ───────────────────────────────
+# Transcripciones y auditorías de prospectos reales
+copiloto-spin/llamadas/
+# Contexto del prospecto del día (datos personales; se llena en local)
+copiloto-spin/contexto_llamada.md
+copiloto-spin/negocios/*/contexto_llamada.md
+!copiloto-spin/negocios/_plantilla/contexto_llamada.md
+
+# ── Documentos internos (estrategia / análisis, no van al público) ──
+CLAUDE.md
+copiloto-spin/viabilidad_saas.md
+copiloto-spin/ab_modelos.md
+
+# ── Basura local ────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.wav
+.claude/settings.local.json
