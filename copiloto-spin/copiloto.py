@@ -14,6 +14,7 @@ Uso:
   python copiloto.py --cierre               # arranca directo en modo cierre
   python copiloto.py --modelo economico     # cerebro GLM-5.2 (abierto, via Workers AI)
   python copiloto.py --negocio demo-boletas # vender OTRO negocio (carpeta en negocios/)
+  python copiloto.py --oferta imperio       # fijar la oferta a vender HOY (o selector "Vender:")
   python copiloto.py --consola 40           # prueba en consola durante N segundos
   python copiloto.py --intervalo 20         # cambia la cadencia del analisis
 """
@@ -85,6 +86,25 @@ prompts_activos = cargar_prompts()
 # oferta/precio/objeciones). Dict compartido entre el hilo de tkinter y el
 # de asyncio; el asesor lo lee en cada analisis, se puede cambiar en vivo.
 modo_analisis = {"valor": "spin"}
+# Oferta a vender HOY, fijada por el vendedor (selector "Vender:" de la
+# ventana o flag --oferta). "" = automatico: el modelo decide con el contexto.
+oferta_objetivo = {"valor": ""}
+
+
+def _bloque_oferta() -> str:
+    """Anexo del system prompt cuando el vendedor fijo la oferta del dia."""
+    oferta = oferta_objetivo["valor"]
+    if not oferta:
+        return ""
+    return (
+        "\n\n# OBJETIVO FIJADO EN VIVO POR EL VENDEDOR (PRIORIDAD ABSOLUTA)\n"
+        f"El vendedor fijó en la app la oferta a vender HOY: **{oferta}**. "
+        "Esto manda sobre cualquier otro objetivo, incluido el del contexto "
+        "de la llamada si dice otra cosa. Orienta dolores, implicaciones, "
+        "pitch, manejo de objeciones y cierre hacia ESA oferta. Sugiere "
+        "pivotear a otra oferta SOLO si el prospecto claramente no califica "
+        "o la pide él mismo — y si eso pasa, dilo explícitamente.\n"
+    )
 
 
 class Transcript:
@@ -329,7 +349,10 @@ async def asesor(transcript, ui, intervalo: int) -> None:
             continue  # nada nuevo y nadie forzo (cambiar de modo tambien fuerza)
         analizadas = len(transcript.lineas)
 
-        prompt = prompts_activos["cierre" if modo_analisis["valor"] == "cierre" else "spin"]
+        prompt = (
+            prompts_activos["cierre" if modo_analisis["valor"] == "cierre" else "spin"]
+            + _bloque_oferta()
+        )
         tier = modelo_vivo["valor"]
         etiqueta = MODELOS_VIVO[tier]["etiqueta"]
         ui.put(("estado", f"Analizando con {etiqueta}..."))
@@ -512,7 +535,7 @@ def modo_ventana(intervalo: int) -> None:
 
     raiz = tk.Tk()
     raiz.title(f"Copiloto SPIN — {prompts_activos['nombre']}")
-    raiz.geometry("440x690+40+40")
+    raiz.geometry("440x720+40+40")
     raiz.configure(bg="#1a1a2e")
     raiz.attributes("-topmost", True)
 
@@ -562,6 +585,32 @@ def modo_ventana(intervalo: int) -> None:
             selectcolor="#16213e", activebackground="#1a1a2e",
             activeforeground="#ffffff", font=("Segoe UI", 9), anchor="w",
         ).pack(side="left", expand=True, fill="x")
+
+    # Selector de la oferta a vender HOY (cambiable en vivo; fuerza re-analisis
+    # para que las sugerencias apunten ya a la oferta elegida).
+    oferta_var = tk.StringVar(value=oferta_objetivo["valor"])
+
+    def cambiar_oferta():
+        oferta_objetivo["valor"] = oferta_var.get()
+        forzar_analisis.set()
+
+    ofertas_ui = prompts_activos.get("ofertas") or []
+    if ofertas_ui:
+        marco_oferta = tk.Frame(raiz, bg="#1a1a2e")
+        marco_oferta.pack(fill="x", padx=10, pady=(2, 0))
+        tk.Label(
+            marco_oferta, text="Vender:", bg="#1a1a2e", fg="#8888aa",
+            font=("Segoe UI", 9),
+        ).pack(side="left")
+        for texto, valor in [("Auto", "")] + [
+            (o.capitalize(), o) for o in ofertas_ui
+        ]:
+            tk.Radiobutton(
+                marco_oferta, text=texto, value=valor, variable=oferta_var,
+                command=cambiar_oferta, bg="#1a1a2e", fg="#ffffff",
+                selectcolor="#16213e", activebackground="#1a1a2e",
+                activeforeground="#ffffff", font=("Segoe UI", 9), anchor="w",
+            ).pack(side="left", expand=True, fill="x")
 
     titulo = tk.Label(
         raiz, text=TITULOS[modo_analisis["valor"]], bg="#1a1a2e", fg="#e94560",
@@ -636,6 +685,10 @@ if __name__ == "__main__":
     parser.add_argument("--negocio", default=NEGOCIO_DEFECTO,
                         help="que negocio se vende: carpeta en negocios/ con su "
                              "negocio.md y objeciones.md (defecto: imperio)")
+    parser.add_argument("--oferta", metavar="NOMBRE",
+                        help="oferta a priorizar HOY (ej. 'imperio' o 'agencia'; "
+                             "basta parte del nombre; tambien cambiable en la "
+                             "ventana con el selector 'Vender:')")
     args = parser.parse_args()
 
     if args.cierre:
@@ -643,6 +696,12 @@ if __name__ == "__main__":
     modelo_vivo["valor"] = args.modelo
     if args.negocio != prompts_activos["nombre"]:
         prompts_activos = cargar_prompts(args.negocio)
+    if args.oferta:
+        buscada = args.oferta.strip().lower()
+        oferta_objetivo["valor"] = next(
+            (o for o in prompts_activos.get("ofertas") or [] if buscada in o.lower()),
+            args.oferta.strip(),
+        )
     if args.consola:
         asyncio.run(modo_consola(args.consola, args.intervalo))
     else:

@@ -22,6 +22,7 @@ python copiloto.py                        # arranca en modo 1ª llamada (SPIN)
 python copiloto.py --cierre               # arranca directo en modo cierre
 python copiloto.py --modelo premium       # cerebro: economico | premium | max
 python copiloto.py --negocio demo-boletas # vender OTRO negocio (ver negocios/)
+python copiloto.py --oferta imperio       # fijar la oferta a vender HOY
 ```
 
 **Multi-negocio:** cada negocio vive en `negocios/<nombre>/` con su
@@ -32,6 +33,14 @@ arranca con `--negocio <nombre>`. El de Diego es `negocios/imperio/` (defecto).
 **Selector de modelo** (también en la ventana, cambiable en vivo):
 Económico = GLM-5.2 (~$0,50/llamada, requiere Workers Paid en Cloudflare) ·
 Premium = Sonnet 5 (~$0,90) · Máx = Opus 4.8 (~$1,50, defecto).
+
+**Selector "Vender:"** (en la ventana, cambiable en vivo): fija qué oferta del
+negocio priorizar HOY (las lee de los encabezados `## Oferta N — NOMBRE` del
+`negocio.md`). Con una oferta fijada, todas las sugerencias empujan hacia ella
+con prioridad absoluta (solo sugiere pivotear si el prospecto no califica o
+pide la otra); en **Auto** el modelo decide según el contexto. Cambiarlo fuerza
+un re-análisis inmediato. También por consola: `--oferta imperio` (basta parte
+del nombre).
 
 Se abre una ventana flotante siempre visible. Antes de la llamada:
 

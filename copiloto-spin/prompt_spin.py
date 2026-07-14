@@ -16,6 +16,7 @@ negocio nuevo, copiar la carpeta negocios/_plantilla/.
 tests y scripts.
 """
 
+import re
 from pathlib import Path
 
 _BASE = Path(__file__).parent
@@ -207,6 +208,23 @@ def _leer(ruta: Path) -> str:
         return ""
 
 
+_PATRON_OFERTA = re.compile(r"^##\s*Oferta\s*\d*\s*[—–:-]\s*(.+?)\s*$", re.MULTILINE)
+
+
+def _extraer_ofertas(contexto_negocio: str) -> list[str]:
+    """Nombres de las ofertas del negocio (encabezados '## Oferta N — NOMBRE').
+
+    Alimenta el selector "Vender:" de la ventana; el parentesis final del
+    encabezado (aclaraciones tipo "la venta por defecto") se descarta.
+    """
+    ofertas = []
+    for crudo in _PATRON_OFERTA.findall(contexto_negocio):
+        nombre = re.sub(r"\s*\(.*?\)\s*$", "", crudo).strip()
+        if nombre:
+            ofertas.append(nombre)
+    return ofertas
+
+
 def negocios_disponibles() -> list[str]:
     """Negocios utilizables: subcarpetas de negocios/ con negocio.md."""
     if not CARPETA_NEGOCIOS.exists():
@@ -255,6 +273,7 @@ def cargar_prompts(negocio: str = NEGOCIO_DEFECTO) -> dict:
     )
     return {
         "nombre": negocio,
+        "ofertas": _extraer_ofertas(contexto_negocio),
         "spin": base + _METODO_Y_FORMATO,
         "cierre": base + _METODO_CIERRE,
         "auditoria": base + _METODO_AUDITORIA,

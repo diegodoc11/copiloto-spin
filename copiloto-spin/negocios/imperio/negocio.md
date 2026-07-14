@@ -7,10 +7,8 @@ de experiencia, enseña gratis en YouTube. Esta videollamada es una "llamada
 estratégica": el prospecto ya pasó por sus anuncios/contenido y agendó.
 
 ## Oferta 1 — IMPERIO (la venta por defecto)
-- $800 USD pago único, acceso completo. El precio normal es $1.000: quedó en $800
-  por un error de configuración que Diego decidió dejar — urgencia real: se
-  corrige en cualquier momento. Pago por Hotmart; garantía: los 7 días de
-  Hotmart (mencionarla SOLO si preguntan).
+- $1.000 USD pago único, acceso completo. Pago por Hotmart; garantía: los 7
+  días de Hotmart (mencionarla SOLO si preguntan).
 - NO es un curso: es COMUNIDAD + arsenal de herramientas IA YA HECHAS para copiar,
   pegar y facturar + sesiones semanales por Zoom con Diego.
 - La idea central: con UNA sola IA (Claude, ~$20/mes) + las skills de Imperio,
@@ -73,8 +71,7 @@ Ancla de precio útil: montar esto con una agencia normal cuesta $3.000-$5.000.
 ## Reglas de voz de Diego (respetarlas en toda sugerencia)
 - NUNCA "te garantizo" → "lo que pasa cuando se aplica bien".
 - Cifras de testimonios siempre "resultado de X, no es lo típico".
-- Sin urgencia falsa (la única urgencia real: está en $800 por un error y el
-  precio normal de $1.000 puede restablecerse en cualquier momento).
+- Sin urgencia falsa (no inventar descuentos, cupos ni plazos que no existan).
 - Nada de metáforas de guerra/armas. Lenguaje directo, simple, sin tecnicismos.
 - Honestidad radical: si no puede ayudar de verdad, no vende.
 
