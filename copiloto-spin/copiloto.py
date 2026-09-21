@@ -5,14 +5,19 @@ Escucha la llamada (voz del prospecto por el audio del sistema + tu voz por
 el microfono), transcribe en vivo con Deepgram y cada ~25 segundos le pide
 a Claude las siguientes preguntas SPIN, mostradas en una ventana flotante.
 
-Tiene dos modos (Diego vende a dos llamadas), intercambiables en la ventana:
-  - SPIN (defecto): primera llamada, indagacion de dolores e implicaciones.
-  - Cierre: segunda llamada — oferta, precio y manejo de objeciones.
+El vendedor elige en la ventana como vende (se recuerda entre sesiones):
+  - En 2 llamadas: la 1a es indagacion SPIN y la 2a es la de cierre (oferta,
+    precio y objeciones); se marca cual toca hoy.
+  - En 1 llamada: indaga, presenta, da precio y cierra en la misma llamada.
+La informacion del negocio (ofertas, clientes, objeciones, prospecto de hoy) se
+carga desde la ventana "Tu negocio", a mano o pegando material para que la IA
+lo organice.
 
 Uso:
   python copiloto.py                        # ventana flotante (uso real en llamadas)
-  python copiloto.py --cierre               # arranca directo en modo cierre
-  python copiloto.py --modelo economico     # cerebro GLM-5.2 (abierto, via Workers AI)
+  python copiloto.py --cierre               # venta en 2 llamadas, hoy toca la de cierre
+  python copiloto.py --una-llamada          # venta completa en una sola llamada
+  python copiloto.py --modelo economico     # cerebro Sonnet 5 (mas barato que el Max)
   python copiloto.py --negocio demo-boletas # vender OTRO negocio (carpeta en negocios/)
   python copiloto.py --oferta imperio       # fijar la oferta a vender HOY (o selector "Vender:")
   python copiloto.py --consola 40           # prueba en consola durante N segundos
@@ -24,12 +29,15 @@ import asyncio
 import json
 import os
 import queue
+import re
 import subprocess
 import threading
 import time
 import tomllib
+import unicodedata
 import warnings
 from pathlib import Path
+from types import SimpleNamespace
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 import audioop  # noqa: E402
@@ -45,26 +53,31 @@ from config import (
     CLOUDFLARE_API_TOKEN,
     DEEPGRAM_API_KEY,
 )
-from prompt_spin import NEGOCIO_DEFECTO, cargar_prompts
+from prompt_spin import NEGOCIO_DEFECTO, cargar_prompts, negocios_disponibles
 
 CHUNK_MS = 100
-MODELO = "claude-opus-4-8"
+MODELO = "claude-opus-5"
 CARPETA_LLAMADAS = Path(__file__).parent / "llamadas"
 # Raiz del proyecto (donde vive .claude/skills/auditar-llamada): claude -p debe
 # correr desde ahi para que encuentre la skill.
 RAIZ_PROYECTO = Path(__file__).parent.parent
 
-# Tiers del analisis EN VIVO (A/B con llamadas reales del 2026-07-11, ver
-# ab_modelos.md): max = Opus 4.8 (el mejor, ~$1.50/llamada de 30 min);
-# premium = Sonnet 5 sin razonamiento (casi Opus, ~$0.90); economico = GLM-5.2
-# (abierto MIT via Workers AI, empata con Sonnet en el prompt SPIN, ~$0.50).
+# Tiers del analisis EN VIVO. La ventana ofrece dos: max = Opus 5 (el mejor,
+# ~$1.50/llamada de 30 min; mismo precio que Opus 4.8) y economico = Sonnet 5
+# (~$0.60-0.90; en el A/B del 2026-07-11 saco 7/8 vs 8/8 de Opus, ver
+# ab_modelos.md). Los dos corren con la MISMA clave de Anthropic, asi cualquier
+# vendedor los usa sin montar nada mas. Fable 5.1 se descarto para el vivo:
+# cuesta el doble que Opus y siempre razona antes de responder (mas espera).
+# "glm" (GLM-5.2 abierto via Workers AI, ~$0.50) queda solo por flag: exige
+# cuenta de Cloudflare con Workers Paid, demasiada friccion para repartirlo.
 MODELOS_VIVO = {
-    "max": {"id": "claude-opus-4-8", "etiqueta": "Máx · Opus 4.8"},
-    "premium": {"id": "claude-sonnet-5", "etiqueta": "Premium · Sonnet 5"},
-    "economico": {"id": None, "etiqueta": "Económico · GLM-5.2"},
+    "max": {"id": "claude-opus-5", "etiqueta": "Máx (Opus 5)"},
+    "economico": {"id": "claude-sonnet-5", "etiqueta": "Económico (Sonnet 5)"},
+    "glm": {"id": None, "etiqueta": "GLM-5.2"},
 }
+MODELOS_VENTANA = ("economico", "max")
 
-# Workers AI (tier economico): si no hay CLOUDFLARE_API_TOKEN en .env se usa el
+# Workers AI (tier glm): si no hay CLOUDFLARE_API_TOKEN en .env se usa el
 # token de la sesion de wrangler, que expira ~1h — se refresca solo corriendo
 # wrangler en el proyecto del bot de IG (el unico con wrangler instalado).
 CUENTA_CLOUDFLARE = CLOUDFLARE_ACCOUNT_ID or "e935213e2193d286e0a788544a9935cd"
@@ -79,13 +92,38 @@ solicitar_auditoria = threading.Event()
 # Tier del modelo del analisis en vivo; compartido tkinter/asyncio igual que
 # modo_analisis (el selector de la ventana lo cambia en caliente).
 modelo_vivo = {"valor": "max"}
-# Prompts del negocio activo ({"nombre","spin","cierre","auditoria"}); el
-# flag --negocio los recarga en el arranque. Defecto: imperio (el de Diego).
+# Prompts del negocio activo ({"nombre","ofertas","spin","cierre","completa",
+# "auditoria"}). Arranca con el ultimo negocio usado (o --negocio); la ventana
+# "Tu negocio" lo actualiza EN SITIO al guardar, sin reiniciar.
 prompts_activos = cargar_prompts()
-# Modo del asesor: "spin" (1a llamada, indagacion) o "cierre" (2a llamada,
-# oferta/precio/objeciones). Dict compartido entre el hilo de tkinter y el
-# de asyncio; el asesor lo lee en cada analisis, se puede cambiar en vivo.
+# Modo del asesor: "spin" (1a de 2 llamadas, indagacion), "cierre" (2a de 2:
+# oferta/precio/objeciones) o "completa" (toda la venta en una llamada). Dict
+# compartido entre el hilo de tkinter y el de asyncio; el asesor lo lee en
+# cada analisis, se puede cambiar en vivo.
 modo_analisis = {"valor": "spin"}
+
+# Lo que el vendedor eligio la ultima vez (como vende, negocio, modelo); la
+# ventana lo guarda al cambiarlo y los flags de la linea de comandos mandan.
+RUTA_PREFERENCIAS = Path(__file__).parent / "preferencias.json"
+
+
+def leer_preferencias() -> dict:
+    try:
+        return json.loads(RUTA_PREFERENCIAS.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def guardar_preferencias(**cambios) -> None:
+    try:
+        RUTA_PREFERENCIAS.write_text(
+            json.dumps({**leer_preferencias(), **cambios}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass  # sin disco no se recuerda la eleccion; la llamada sigue
+
+
 # Oferta a vender HOY, fijada por el vendedor (selector "Vender:" de la
 # ventana o flag --oferta). "" = automatico: el modelo decide con el contexto.
 oferta_objetivo = {"valor": ""}
@@ -301,15 +339,20 @@ async def analizar_en_vivo(
     client: AsyncAnthropic, tier: str, prompt: str, texto: str
 ) -> str:
     """Un analisis del transcript con el tier elegido; devuelve la sugerencia."""
-    if tier == "economico":
+    if tier == "glm":
         return await _analizar_glm(prompt, texto)
-    # Sonnet 5 piensa por defecto y el razonamiento se comeria el max_tokens
-    # (devolveria vacio); para el loop en vivo va sin razonamiento. Opus 4.8
-    # sin el parametro ya corre sin pensar.
-    extra = {"thinking": {"type": "disabled"}} if tier == "premium" else {}
+    # Los dos piensan por defecto y el razonamiento se comeria el max_tokens
+    # (devolveria vacio). Sonnet 5 va sin razonamiento (asi se valido en el
+    # A/B). Opus 5 va con razonamiento minimo: apagarselo del todo puede colar
+    # etiquetas internas en la respuesta, y con esfuerzo "low" tarda lo mismo
+    # (~9 s medido con una llamada real).
+    if tier == "economico":
+        extra = {"thinking": {"type": "disabled"}}
+    else:
+        extra = {"thinking": {"type": "adaptive"}, "output_config": {"effort": "low"}}
     respuesta = await client.messages.create(
         model=MODELOS_VIVO[tier]["id"],
-        max_tokens=800,
+        max_tokens=4000,
         system=[
             {
                 "type": "text",
@@ -328,6 +371,8 @@ async def analizar_en_vivo(
         ],
         **extra,
     )
+    if respuesta.stop_reason == "refusal":
+        raise RuntimeError("el modelo declinó responder este tramo de la llamada")
     return next(b.text for b in respuesta.content if b.type == "text")
 
 
@@ -349,10 +394,7 @@ async def asesor(transcript, ui, intervalo: int) -> None:
             continue  # nada nuevo y nadie forzo (cambiar de modo tambien fuerza)
         analizadas = len(transcript.lineas)
 
-        prompt = (
-            prompts_activos["cierre" if modo_analisis["valor"] == "cierre" else "spin"]
-            + _bloque_oferta()
-        )
+        prompt = prompts_activos[modo_analisis["valor"]] + _bloque_oferta()
         tier = modelo_vivo["valor"]
         etiqueta = MODELOS_VIVO[tier]["etiqueta"]
         ui.put(("estado", f"Analizando con {etiqueta}..."))
@@ -362,7 +404,21 @@ async def asesor(transcript, ui, intervalo: int) -> None:
             ui.put(("estado", f"Sugerencia de {etiqueta}: {time.strftime('%H:%M:%S')}"))
         except Exception as e:  # noqa: BLE001 — mostrar en UI y dejar rastro
             _log_error(f"Analisis en vivo ({tier}) fallo: {e}")
-            ui.put(("estado", f"Error al analizar ({etiqueta}): {e}"))
+            ui.put(("estado", f"Error al analizar: {_explicar_error(e)}"))
+
+
+def _explicar_error(e: Exception) -> str:
+    """Traduce los errores tipicos de un usuario nuevo a algo accionable."""
+    texto = str(e)
+    bajo = texto.lower()
+    if "credit balance" in bajo:
+        return "tu cuenta de Anthropic no tiene créditos: recarga en console.anthropic.com → Billing"
+    if "401" in texto or "authentication" in bajo or "invalid x-api-key" in bajo:
+        servicio = "Deepgram" if "websocket" in bajo or "deepgram" in bajo else "Anthropic"
+        return f"la clave de {servicio} no es válida: revísala en el archivo .env y vuelve a abrir"
+    if "getaddrinfo" in bajo or "connection error" in bajo:
+        return f"sin conexión a internet ({texto[:80]})"
+    return texto
 
 
 def _log_error(mensaje: str) -> None:
@@ -522,135 +578,488 @@ async def modo_consola(duracion: int, intervalo: int) -> None:
 # ----------------------------- modo ventana ------------------------------
 
 
-def modo_ventana(intervalo: int) -> None:
+# Paleta y tipos de la ventana. Una sola voz fuerte: el ambar de "lo que dices
+# ahora" (como la luz de un teleprompter); todo lo demas se queda callado.
+COLORES = {
+    "fondo": "#141821",
+    "superficie": "#1B2130",
+    "elevada": "#2A3246",
+    "linea": "#2C3448",
+    "texto": "#E9ECF2",
+    "tenue": "#8A93A8",
+    "apagado": "#5D677D",
+    "ambar": "#F3B64C",
+    "ambar_fondo": "#2A2518",
+    "coral": "#FF8069",
+    "coral_fondo": "#2B1D1F",
+    "verde": "#5CD6A1",
+    "verde_fondo": "#16291F",
+    "prospecto": "#8DB8FF",
+}
+FUENTE_ETIQUETA = ("Bahnschrift SemiCondensed", 10)
+FUENTE_FASE = ("Bahnschrift SemiBold SemiConden", 10)
+FUENTE_PRINCIPAL = ("Segoe UI Variable Display Semib", 15)
+FUENTE_TEXTO = ("Segoe UI Variable Text", 11)
+FUENTE_CHICA = ("Segoe UI Variable Text", 9)
+FUENTE_NEGRITA = ("Segoe UI Variable Text Semibold", 10)
+FUENTE_TITULO = ("Segoe UI Variable Display Semib", 16)
+FUENTE_EDITOR = ("Segoe UI Variable Text", 10)
+
+# Fases que muestra la barra de progreso, por modo: filas de (rotulo, prefijo
+# con el que se reconoce lo que el modelo pone en FASE ACTUAL / MOMENTO). La
+# venta en una llamada recorre las dos mitades: indagar arriba, vender abajo.
+_INDAGAR = [("Situación", "situa"), ("Problema", "probl"), ("Implicación", "impli"),
+            ("Necesidad", "neces")]
+FASES_UI = {
+    "spin": [_INDAGAR + [("Cierre", "cierr")]],
+    "cierre": [[("Reconexión", "recon"), ("Presentación", "prese"), ("Precio", "preci"),
+                ("Objeciones", "objec"), ("Cierre", "cierr")]],
+    "completa": [_INDAGAR, [("Oferta", "prese"), ("Precio", "preci"),
+                            ("Objeciones", "objec"), ("Cierre", "cierr")]],
+}
+CAMPOS_SUGERENCIA = (
+    "FASE ACTUAL", "MOMENTO", "AVATAR", "DOLORES DETECTADOS", "OBJECION",
+    "SENAL DE COMPRA",
+)
+
+
+def _sin_tildes(texto: str) -> str:
+    return "".join(
+        c for c in unicodedata.normalize("NFD", texto) if unicodedata.category(c) != "Mn"
+    )
+
+
+def _parsear_sugerencia(texto: str) -> tuple[dict, list[str]]:
+    """Separa la respuesta del modelo en campos (FASE, AVATAR...) y preguntas."""
+    campos: dict[str, str] = {}
+    preguntas: list[str] = []
+    for linea in texto.splitlines():
+        limpia = linea.replace("*", "").strip()
+        if not limpia:
+            continue
+        numerada = re.match(r"^\d[.)]\s*(.+)$", limpia)
+        if numerada:
+            preguntas.append(numerada.group(1).strip().strip('"“”'))
+            continue
+        if ":" in limpia:
+            clave, valor = limpia.split(":", 1)
+            clave = _sin_tildes(clave.strip()).upper()
+            if clave in CAMPOS_SUGERENCIA:
+                campos[clave] = valor.strip()
+    return campos, preguntas
+
+
+def _es_vacio(valor: str | None) -> bool:
+    """True si el modelo dijo "ninguno", "ninguna aún", "aún no claro"..."""
+    if valor is None:
+        return True
+    v = _sin_tildes(valor.lower()).strip(' ."-')
+    return not v or v.startswith(("ninguno", "ninguna", "aun no"))
+
+
+def modo_ventana(intervalo: int, arrancar_nucleo: bool = True):
+    """Ventana flotante. Con arrancar_nucleo=False no escucha audio ni corre
+    mainloop: devuelve sus piezas (raiz, ui, ...) para vistas previas."""
     import tkinter as tk
 
+    import ventana_negocio
+
+    C = COLORES
     transcript = Transcript()
     ui: queue.Queue = queue.Queue()
 
-    threading.Thread(
-        target=lambda: asyncio.run(nucleo(transcript, ui, intervalo)),
-        daemon=True,
-    ).start()
+    def correr_nucleo():
+        try:
+            asyncio.run(nucleo(transcript, ui, intervalo))
+        except Exception as e:  # noqa: BLE001 — sin esto la ventana queda en "Iniciando..."
+            _log_error(f"La escucha se detuvo: {e!r}")
+            ui.put(("estado", f"Error, la escucha se detuvo: {_explicar_error(e)}"))
 
+    if arrancar_nucleo:
+        threading.Thread(target=correr_nucleo, daemon=True).start()
+
+    # Nitidez: sin esto Windows estira la ventana como imagen y el texto sale
+    # borroso en pantallas con escala (125%, 150%). Luego se escala a mano.
+    try:
+        import ctypes
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+    except (AttributeError, OSError):
+        pass
     raiz = tk.Tk()
+    escala = raiz.winfo_fpixels("1i") / 96
+
+    def px(n: int) -> int:
+        return round(n * escala)
+
     raiz.title(f"Copiloto SPIN — {prompts_activos['nombre']}")
-    raiz.geometry("440x720+40+40")
-    raiz.configure(bg="#1a1a2e")
+    raiz.geometry(f"{px(460)}x{px(740)}+{px(40)}+{px(40)}")
+    raiz.minsize(px(380), px(560))
+    raiz.configure(bg=C["fondo"])
     raiz.attributes("-topmost", True)
 
-    estado = tk.Label(
-        raiz, text="Iniciando...", bg="#1a1a2e", fg="#8888aa",
-        font=("Segoe UI", 9), anchor="w",
+    class Segmentado(tk.Frame):
+        """Selector de opciones en pastilla (reemplaza los radio buttons)."""
+
+        def __init__(self, padre, opciones, valor, al_cambiar, fuente=FUENTE_ETIQUETA):
+            super().__init__(padre, bg=C["linea"], padx=px(1), pady=px(1))
+            self.valor, self.al_cambiar, self.botones = valor, al_cambiar, {}
+            for i, (texto, v) in enumerate(opciones):
+                b = tk.Label(self, text=texto, font=fuente, padx=px(8), pady=px(4), cursor="hand2")
+                b.pack(side="left", fill="x", expand=True, padx=(0 if i == 0 else 1, 0))
+                b.bind("<Button-1>", lambda _e, v=v: self.elegir(v))
+                b.bind("<Enter>", lambda _e, b=b, v=v: v != self.valor and b.configure(fg=C["texto"]))
+                b.bind("<Leave>", lambda _e: self.pintar())
+                self.botones[v] = b
+            self.pintar()
+
+        def elegir(self, v):
+            if v == self.valor:
+                return
+            self.valor = v
+            self.pintar()
+            self.al_cambiar(v)
+
+        def pintar(self):
+            for v, b in self.botones.items():
+                activo = v == self.valor
+                b.configure(
+                    bg=C["elevada"] if activo else C["superficie"],
+                    fg=C["texto"] if activo else C["tenue"],
+                )
+
+    def boton(padre, texto, comando, primario=False):
+        fondo, frente = (C["ambar"], C["fondo"]) if primario else (C["superficie"], C["texto"])
+        hover = "#FFC866" if primario else C["elevada"]
+        b = tk.Label(padre, text=texto, bg=fondo, fg=frente, cursor="hand2", pady=px(8),
+                     font=FUENTE_NEGRITA)
+        b.bind("<Button-1>", lambda _e: comando())
+        b.bind("<Enter>", lambda _e: b.configure(bg=hover))
+        b.bind("<Leave>", lambda _e: b.configure(bg=fondo))
+        return b
+
+    # --- cabecera: estado de la escucha + negocio -----------------------
+    cabecera = tk.Frame(raiz, bg=C["fondo"])
+    cabecera.pack(fill="x", padx=px(14), pady=(px(12), px(0)))
+    punto = tk.Label(cabecera, text="●", bg=C["fondo"], fg=C["ambar"], font=("Segoe UI", 10))
+    punto.pack(side="left")
+    estado = tk.Label(cabecera, text="Iniciando...", bg=C["fondo"], fg=C["tenue"],
+                      font=FUENTE_CHICA, anchor="w", justify="left", wraplength=px(270))
+    estado.pack(side="left", fill="x", expand=True, padx=(px(4), px(0)))
+    boton_negocio = tk.Label(
+        cabecera, bg=C["superficie"], fg=C["texto"], font=FUENTE_ETIQUETA,
+        padx=px(10), pady=px(3), cursor="hand2",
     )
-    estado.pack(fill="x", padx=10, pady=(8, 0))
+    boton_negocio.pack(side="right")
+    boton_negocio.bind("<Enter>", lambda _e: boton_negocio.configure(bg=C["elevada"]))
+    boton_negocio.bind("<Leave>", lambda _e: boton_negocio.configure(bg=C["superficie"]))
 
-    TITULOS = {"spin": "SUGERENCIAS SPIN", "cierre": "SUGERENCIAS DE CIERRE"}
-    modo_var = tk.StringVar(value=modo_analisis["valor"])
+    # --- como vende y que llamada toca hoy -------------------------------
+    rotulo_principal = {"spin": "Pregunta ahora", "cierre": "Di esto ahora",
+                        "completa": "Di esto ahora"}
+    fuente_modo = ("Bahnschrift SemiCondensed", 11)
 
-    def cambiar_modo():
-        modo_analisis["valor"] = modo_var.get()
-        titulo.configure(text=TITULOS[modo_var.get()])
+    def aplicar_modo(valor):
+        modo_analisis["valor"] = valor
+        pintar_fases(None)
         forzar_analisis.set()  # re-analiza ya con el cerebro del modo nuevo
 
-    marco_modo = tk.Frame(raiz, bg="#1a1a2e")
-    marco_modo.pack(fill="x", padx=10, pady=(6, 0))
-    for texto, valor in (("1ª llamada (SPIN)", "spin"), ("Cierre (oferta)", "cierre")):
-        tk.Radiobutton(
-            marco_modo, text=texto, value=valor, variable=modo_var,
-            command=cambiar_modo, bg="#1a1a2e", fg="#ffffff",
-            selectcolor="#16213e", activebackground="#1a1a2e",
-            activeforeground="#ffffff", font=("Segoe UI", 9), anchor="w",
-        ).pack(side="left", expand=True, fill="x")
+    def fila_modo(rotulo, opciones, valor, al_cambiar):
+        fila = tk.Frame(marco_modo, bg=C["fondo"])
+        tk.Label(fila, text=rotulo, width=9, anchor="w", bg=C["fondo"], fg=C["tenue"],
+                 font=FUENTE_ETIQUETA).pack(side="left")
+        selector = Segmentado(fila, opciones, valor, al_cambiar, fuente=fuente_modo)
+        selector.pack(side="left", fill="x", expand=True)
+        return fila, selector
 
-    # Selector del modelo (cambiable en vivo; aplica desde el siguiente
-    # analisis — no fuerza uno para no gastar de mas).
-    modelo_var = tk.StringVar(value=modelo_vivo["valor"])
+    def cambiar_llamadas(cuantas):
+        guardar_preferencias(llamadas=cuantas)
+        if cuantas == 1:
+            fila_hoy.pack_forget()
+            aplicar_modo("completa")
+        else:
+            fila_hoy.pack(fill="x", pady=(px(6), 0))
+            aplicar_modo(selector_hoy.valor)
 
-    def cambiar_modelo():
-        modelo_vivo["valor"] = modelo_var.get()
+    marco_modo = tk.Frame(raiz, bg=C["fondo"])
+    marco_modo.pack(fill="x", padx=px(14), pady=(px(10), px(0)))
+    en_una = modo_analisis["valor"] == "completa"
+    fila_vendo, _ = fila_modo(
+        "Vendo en", (("1 llamada", 1), ("2 llamadas", 2)), 1 if en_una else 2, cambiar_llamadas)
+    fila_vendo.pack(fill="x")
+    fila_hoy, selector_hoy = fila_modo(
+        "Hoy toca", (("1ª: indagar", "spin"), ("2ª: cerrar la venta", "cierre")),
+        "spin" if en_una else modo_analisis["valor"], aplicar_modo)
+    if not en_una:
+        fila_hoy.pack(fill="x", pady=(px(6), 0))
 
-    marco_modelo = tk.Frame(raiz, bg="#1a1a2e")
-    marco_modelo.pack(fill="x", padx=10, pady=(2, 0))
-    tk.Label(
-        marco_modelo, text="Modelo:", bg="#1a1a2e", fg="#8888aa",
-        font=("Segoe UI", 9),
-    ).pack(side="left")
-    for texto, valor in (
-        ("Económico", "economico"), ("Premium", "premium"), ("Máx", "max"),
-    ):
-        tk.Radiobutton(
-            marco_modelo, text=texto, value=valor, variable=modelo_var,
-            command=cambiar_modelo, bg="#1a1a2e", fg="#ffffff",
-            selectcolor="#16213e", activebackground="#1a1a2e",
-            activeforeground="#ffffff", font=("Segoe UI", 9), anchor="w",
-        ).pack(side="left", expand=True, fill="x")
+    # --- barra de fases (la secuencia real de la llamada) --------------
+    marco_fases = tk.Frame(raiz, bg=C["fondo"])
+    marco_fases.pack(fill="x", padx=px(14), pady=(px(12), px(0)))
 
-    # Selector de la oferta a vender HOY (cambiable en vivo; fuerza re-analisis
-    # para que las sugerencias apunten ya a la oferta elegida).
-    oferta_var = tk.StringVar(value=oferta_objetivo["valor"])
+    def pintar_fases(actual: str | None):
+        for w in marco_fases.winfo_children():
+            w.destroy()
+        filas = FASES_UI[modo_analisis["valor"]]
+        clave = _sin_tildes(actual or "").strip().lower()[:5]
+        prefijos = [prefijo for fila in filas for _, prefijo in fila]
+        idx = prefijos.index(clave) if clave in prefijos else -1
+        i = -1
+        for n_fila, fila in enumerate(filas):
+            marco_fila = tk.Frame(marco_fases, bg=C["fondo"])
+            marco_fila.pack(fill="x", pady=(px(8) if n_fila else 0, 0))
+            # uniform: todas las celdas del mismo ancho, las filas quedan alineadas
+            for col in range(len(fila)):
+                marco_fila.columnconfigure(col, weight=1, uniform="fase")
+            for col, (fase, _prefijo) in enumerate(fila):
+                i += 1
+                celda = tk.Frame(marco_fila, bg=C["fondo"])
+                celda.grid(row=0, column=col, sticky="ew", padx=(0 if col == 0 else px(3), 0))
+                barra = C["ambar"] if i == idx else (C["tenue"] if i < idx else C["linea"])
+                tk.Label(
+                    celda, text=fase, bg=C["fondo"], anchor="w",
+                    fg=C["texto"] if i == idx else (C["tenue"] if i < idx else C["apagado"]),
+                    font=FUENTE_FASE if i == idx else FUENTE_ETIQUETA,
+                ).pack(fill="x", pady=(0, px(3)))
+                tk.Frame(celda, bg=barra, height=px(3)).pack(fill="x")
 
-    def cambiar_oferta():
-        oferta_objetivo["valor"] = oferta_var.get()
+    pintar_fases(None)
+
+    # --- tarjeta de la sugerencia --------------------------------------
+    # height chico a proposito: la tarjeta se estira con expand=True y asi no
+    # le roba el espacio a la transcripcion cuando la ventana es baja.
+    t = tk.Text(
+        raiz, height=8, bg=C["superficie"], fg=C["texto"], font=FUENTE_TEXTO, wrap="word",
+        relief="flat", padx=px(14), pady=px(10), state="disabled", cursor="arrow",
+        highlightthickness=0, borderwidth=0, spacing2=px(2),
+    )
+    t.pack(fill="both", expand=True, padx=px(14), pady=(px(10), px(0)))
+    t.tag_configure("etiqueta", font=FUENTE_ETIQUETA, foreground=C["tenue"], spacing1=px(14), spacing3=px(4))
+    t.tag_configure("primera", spacing1=px(2))
+    t.tag_configure(
+        "principal", font=FUENTE_PRINCIPAL, foreground=C["ambar"], background=C["ambar_fondo"],
+        lmargin1=px(12), lmargin2=px(12), rmargin=px(12), lmargincolor=C["ambar_fondo"],
+        spacing1=px(10), spacing3=px(10), spacing2=px(3),
+    )
+    t.tag_configure("alterna", foreground=C["texto"], lmargin2=px(22), spacing1=px(5))
+    t.tag_configure("num", foreground=C["apagado"])
+    t.tag_configure("dolor", foreground=C["texto"], lmargin2=px(18), spacing1=px(3))
+    t.tag_configure("vineta", foreground=C["coral"])
+    t.tag_configure("dato", foreground=C["texto"])
+    t.tag_configure("vacio", foreground=C["apagado"])
+    for nombre, frente, fondo in (("obj", C["coral"], C["coral_fondo"]),
+                                  ("senal", C["verde"], C["verde_fondo"])):
+        comun = dict(background=fondo, lmargin1=px(12), lmargin2=px(12), rmargin=px(12), lmargincolor=fondo)
+        t.tag_configure(f"{nombre}_titulo", font=FUENTE_NEGRITA, foreground=frente,
+                        spacing1=px(10), **comun)
+        t.tag_configure(f"{nombre}_texto", foreground=C["texto"], spacing3=px(10), spacing1=px(2), **comun)
+    t.tag_configure("separa", font=("Segoe UI", 4))
+
+    def escribir_sugerencia(bloques: list[tuple[str, tuple | str]]):
+        t.configure(state="normal")
+        t.delete("1.0", "end")
+        for texto, etiquetas in bloques:
+            t.insert("end", texto, etiquetas)
+        t.configure(state="disabled")
+        t.yview_moveto(0)
+
+    def pintar_sugerencia(texto: str):
+        campos, preguntas = _parsear_sugerencia(texto)
+        if not preguntas:  # el modelo se salio del formato: mostrarlo tal cual
+            escribir_sugerencia([(texto, "dato")])
+            return
+        pintar_fases(campos.get("FASE ACTUAL") or campos.get("MOMENTO"))
+        b: list[tuple[str, tuple | str]] = []
+        senal = campos.get("SENAL DE COMPRA")
+        if not _es_vacio(senal):
+            b += [("Señal de compra\n", "senal_titulo"), (senal + "\n", "senal_texto"),
+                  ("\n", "separa")]
+        b += [(rotulo_principal[modo_analisis["valor"]] + "\n",
+               "etiqueta" if b else ("etiqueta", "primera")),
+              (preguntas[0] + "\n", "principal")]
+        if len(preguntas) > 1:
+            b.append(("Otras opciones\n", "etiqueta"))
+            for i, p in enumerate(preguntas[1:], start=2):
+                b += [(f"{i}.   ", ("alterna", "num")), (p + "\n", "alterna")]
+        objecion = campos.get("OBJECION")
+        if not _es_vacio(objecion):
+            nombre, flecha_obj, respuesta = objecion.partition("→")
+            if not flecha_obj:
+                nombre, _, respuesta = objecion.partition("->")
+            b += [("\n", "separa"), (f"Objeción: {nombre.strip()}\n", "obj_titulo"),
+                  ((respuesta.strip() or nombre.strip()) + "\n", "obj_texto")]
+        if "DOLORES DETECTADOS" in campos:
+            b.append(("Dolores detectados\n", "etiqueta"))
+            dolores = campos["DOLORES DETECTADOS"]
+            if _es_vacio(dolores):
+                b.append(("Ninguno todavía\n", "vacio"))
+            else:
+                for d in (x.strip() for x in dolores.split("|")):
+                    if d:
+                        b += [("●  ", ("dolor", "vineta")), (d + "\n", "dolor")]
+        if "AVATAR" in campos:
+            avatar = campos["AVATAR"]
+            b.append(("Avatar\n", "etiqueta"))
+            b.append(("Aún no está claro\n", "vacio") if _es_vacio(avatar) else (avatar + "\n", "dato"))
+        escribir_sugerencia(b)
+
+    escribir_sugerencia([
+        ("Esperando la conversación\n", ("etiqueta", "primera")),
+        ("Cuando el prospecto empiece a hablar, aquí aparece la próxima "
+         "pregunta. Si la quieres ya, pulsa Analizar ahora o F5.\n", "vacio"),
+    ])
+
+    # --- acciones --------------------------------------------------------
+    acciones = tk.Frame(raiz, bg=C["fondo"])
+    acciones.pack(fill="x", padx=px(14), pady=(px(10), px(0)))
+    boton(acciones, "Analizar ahora   F5", forzar_analisis.set, primario=True).pack(
+        side="left", fill="x", expand=True)
+    boton(acciones, "Auditar al terminar", solicitar_auditoria.set).pack(
+        side="left", fill="x", expand=True, padx=(px(8), px(0)))
+    raiz.bind("<F5>", lambda _e: forzar_analisis.set())
+
+    # --- ajustes plegables: modelo y oferta ------------------------------
+    NOMBRES_MODELO = {"economico": "Económico", "max": "Máx", "glm": "GLM-5.2"}
+
+    def resumen_ajustes() -> str:
+        oferta = oferta_objetivo["valor"].capitalize() or "automática"
+        return f"Modelo {NOMBRES_MODELO[modelo_vivo['valor']]}, oferta {oferta}"
+
+    fila_ajustes = tk.Frame(raiz, bg=C["fondo"], cursor="hand2")
+    fila_ajustes.pack(fill="x", padx=px(14), pady=(px(12), px(0)))
+    flecha = tk.Label(fila_ajustes, text="▸  Ajustes", bg=C["fondo"], fg=C["tenue"],
+                      font=FUENTE_ETIQUETA, cursor="hand2")
+    flecha.pack(side="left")
+    resumen = tk.Label(fila_ajustes, text=resumen_ajustes(), bg=C["fondo"], fg=C["apagado"],
+                       font=FUENTE_ETIQUETA, cursor="hand2")
+    resumen.pack(side="right")
+
+    panel = tk.Frame(raiz, bg=C["fondo"])
+
+    def fila_panel(rotulo, opciones, valor, al_cambiar):
+        fila = tk.Frame(panel, bg=C["fondo"])
+        fila.pack(fill="x", pady=(px(6), px(0)))
+        tk.Label(fila, text=rotulo, width=9, anchor="w", bg=C["fondo"], fg=C["tenue"],
+                 font=FUENTE_ETIQUETA).pack(side="left")
+        Segmentado(fila, opciones, valor, al_cambiar).pack(side="left", fill="x", expand=True)
+        return fila
+
+    def cambiar_modelo(valor):
+        # aplica desde el siguiente analisis (no fuerza uno para no gastar de mas)
+        modelo_vivo["valor"] = valor
+        guardar_preferencias(modelo=valor)
+        resumen.configure(text=resumen_ajustes())
+
+    def cambiar_oferta(valor):
+        oferta_objetivo["valor"] = valor
+        resumen.configure(text=resumen_ajustes())
+        forzar_analisis.set()  # que las sugerencias apunten ya a la oferta elegida
+
+    modelos_ui = list(MODELOS_VENTANA)
+    if modelo_vivo["valor"] not in modelos_ui:  # llego por flag (--modelo glm)
+        modelos_ui.append(modelo_vivo["valor"])
+    fila_panel("Modelo", [(NOMBRES_MODELO[k], k) for k in modelos_ui],
+               modelo_vivo["valor"], cambiar_modelo)
+
+    fila_vender = {"marco": None}
+
+    def armar_fila_vender():
+        """Una opcion por cada oferta del negocio activo (se rearma al cambiarlo)."""
+        if fila_vender["marco"] is not None:
+            fila_vender["marco"].destroy()
+            fila_vender["marco"] = None
+        ofertas_ui = prompts_activos.get("ofertas") or []
+        if oferta_objetivo["valor"] not in ofertas_ui:
+            oferta_objetivo["valor"] = ""
+        if len(ofertas_ui) > 1:  # con una sola oferta no hay nada que elegir
+            fila_vender["marco"] = fila_panel(
+                "Vender", [("Automática", "")] + [(o.capitalize(), o) for o in ofertas_ui],
+                oferta_objetivo["valor"], cambiar_oferta)
+        resumen.configure(text=resumen_ajustes())
+
+    armar_fila_vender()
+
+    # --- "Tu negocio": lo que el copiloto sabe del que vende -------------
+    kit = SimpleNamespace(
+        C=C, px=px, Segmentado=Segmentado, boton=boton, FUENTE_TITULO=FUENTE_TITULO,
+        FUENTE_NEGRITA=FUENTE_NEGRITA, FUENTE_TEXTO=FUENTE_TEXTO, FUENTE_CHICA=FUENTE_CHICA,
+        FUENTE_EDITOR=FUENTE_EDITOR, FUENTE_PESTANA=fuente_modo,
+    )
+    ventana_abierta = {"win": None}
+
+    def pintar_negocio():
+        nombre = ventana_negocio.nombre_visible(prompts_activos["nombre"])
+        boton_negocio.configure(text=f"Tu negocio: {nombre}")
+        raiz.title(f"Copiloto SPIN — {nombre}")
+
+    def negocio_guardado(nombre):
+        # En sitio: el asesor (otro hilo) lee este mismo dict en cada analisis.
+        prompts_activos.update(cargar_prompts(nombre))
+        guardar_preferencias(negocio=nombre)
+        pintar_negocio()
+        armar_fila_vender()
         forzar_analisis.set()
 
-    ofertas_ui = prompts_activos.get("ofertas") or []
-    if ofertas_ui:
-        marco_oferta = tk.Frame(raiz, bg="#1a1a2e")
-        marco_oferta.pack(fill="x", padx=10, pady=(2, 0))
-        tk.Label(
-            marco_oferta, text="Vender:", bg="#1a1a2e", fg="#8888aa",
-            font=("Segoe UI", 9),
-        ).pack(side="left")
-        for texto, valor in [("Auto", "")] + [
-            (o.capitalize(), o) for o in ofertas_ui
-        ]:
-            tk.Radiobutton(
-                marco_oferta, text=texto, value=valor, variable=oferta_var,
-                command=cambiar_oferta, bg="#1a1a2e", fg="#ffffff",
-                selectcolor="#16213e", activebackground="#1a1a2e",
-                activeforeground="#ffffff", font=("Segoe UI", 9), anchor="w",
-            ).pack(side="left", expand=True, fill="x")
+    def abrir_negocio(_e=None, empezar_nuevo=False):
+        win = ventana_abierta["win"]
+        if win is not None and win.winfo_exists():
+            win.lift()
+            return win
+        ventana_abierta["win"] = ventana_negocio.abrir(
+            raiz, kit, prompts_activos["nombre"], negocio_guardado, empezar_nuevo)
+        return ventana_abierta["win"]
 
-    titulo = tk.Label(
-        raiz, text=TITULOS[modo_analisis["valor"]], bg="#1a1a2e", fg="#e94560",
-        font=("Segoe UI", 10, "bold"), anchor="w",
-    )
-    titulo.pack(fill="x", padx=10, pady=(8, 0))
-    sugerencias = tk.Text(
-        raiz, height=15, bg="#16213e", fg="#ffffff", font=("Segoe UI", 11),
-        wrap="word", relief="flat", padx=10, pady=8, state="disabled",
-    )
-    sugerencias.pack(fill="both", expand=True, padx=10, pady=(4, 8))
+    boton_negocio.bind("<Button-1>", abrir_negocio)
+    pintar_negocio()
 
-    tk.Button(
-        raiz, text="Analizar ahora", command=forzar_analisis.set,
-        bg="#e94560", fg="white", relief="flat", font=("Segoe UI", 10, "bold"),
-    ).pack(fill="x", padx=10, pady=(0, 6))
+    marco_trans = tk.Frame(raiz, bg=C["fondo"])
 
-    tk.Button(
-        raiz, text="Auditar llamada completa (al terminar)",
-        command=solicitar_auditoria.set,
-        bg="#0f7d5c", fg="white", relief="flat", font=("Segoe UI", 10, "bold"),
-    ).pack(fill="x", padx=10, pady=(0, 8))
+    def alternar_ajustes(_e=None):
+        if panel.winfo_ismapped():
+            panel.pack_forget()
+            flecha.configure(text="▸  Ajustes")
+        else:
+            panel.pack(fill="x", padx=px(14), before=marco_trans)
+            flecha.configure(text="▾  Ajustes")
 
-    tk.Label(
-        raiz, text="TRANSCRIPCION", bg="#1a1a2e", fg="#8888aa",
-        font=("Segoe UI", 9, "bold"), anchor="w",
-    ).pack(fill="x", padx=10)
+    for w in (fila_ajustes, flecha, resumen):
+        w.bind("<Button-1>", alternar_ajustes)
+
+    # --- transcripcion en vivo -------------------------------------------
+    marco_trans.pack(fill="x", padx=px(14), pady=(px(12), px(14)))
+    tk.Frame(marco_trans, bg=C["linea"], height=1).pack(fill="x", pady=(px(0), px(8)))
+    tk.Label(marco_trans, text="Transcripción", bg=C["fondo"], fg=C["tenue"],
+             font=FUENTE_ETIQUETA, anchor="w").pack(fill="x")
     caja_trans = tk.Text(
-        raiz, height=8, bg="#0f1626", fg="#9999aa", font=("Segoe UI", 9),
-        wrap="word", relief="flat", padx=8, pady=6, state="disabled",
+        marco_trans, height=5, bg=C["fondo"], fg=C["tenue"], font=FUENTE_CHICA,
+        wrap="word", relief="flat", padx=px(0), pady=px(4), state="disabled",
+        highlightthickness=0, borderwidth=0, cursor="arrow", spacing1=px(3),
     )
-    caja_trans.pack(fill="x", padx=10, pady=(4, 10))
+    caja_trans.pack(fill="x")
+    fuente_quien = ("Segoe UI Variable Text Semibold", 9)
+    caja_trans.tag_configure("quien_prospecto", foreground=C["prospecto"], font=fuente_quien)
+    caja_trans.tag_configure("quien_tu", foreground=C["apagado"], font=fuente_quien)
+    caja_trans.tag_configure("dice_prospecto", foreground=C["texto"])
+    caja_trans.tag_configure("dice_tu", foreground=C["tenue"])
 
-    def escribir(widget, texto, reemplazar=False):
-        widget.configure(state="normal")
-        if reemplazar:
-            widget.delete("1.0", "end")
-        widget.insert("end", texto)
-        widget.see("end")
-        widget.configure(state="disabled")
+    def agregar_linea(linea: str):
+        quien, _, dice = linea.partition(": ")
+        tipo = "prospecto" if quien.strip().lower().startswith("prospecto") else "tu"
+        caja_trans.configure(state="normal")
+        caja_trans.insert("end", quien + "   ", f"quien_{tipo}")
+        caja_trans.insert("end", dice + "\n", f"dice_{tipo}")
+        caja_trans.see("end")
+        caja_trans.configure(state="disabled")
+
+    def pintar_estado(texto: str):
+        bajo = texto.lower()
+        if bajo.startswith("error") or "falló" in bajo or "sin micro" in bajo:
+            color = C["coral"]
+        elif bajo.startswith(("analizando", "auditando", "iniciando")):
+            color = C["ambar"]
+        else:
+            color = C["verde"]
+        punto.configure(fg=color)
+        estado.configure(text=texto)
 
     def refrescar():
         while True:
@@ -659,15 +1068,23 @@ def modo_ventana(intervalo: int) -> None:
             except queue.Empty:
                 break
             if tipo == "linea":
-                escribir(caja_trans, contenido + "\n")
+                agregar_linea(contenido)
             elif tipo == "sugerencia":
-                escribir(sugerencias, contenido, reemplazar=True)
+                pintar_sugerencia(contenido)
             elif tipo == "estado":
-                estado.configure(text=contenido)
+                pintar_estado(contenido)
         raiz.after(200, refrescar)
 
     refrescar()
+    if not arrancar_nucleo:
+        return SimpleNamespace(raiz=raiz, ui=ui, alternar_ajustes=alternar_ajustes,
+                               abrir_negocio=abrir_negocio)
     raiz.mainloop()
+    # Ventana cerrada: salir YA. Un apagado normal desmonta PortAudio mientras
+    # el hilo de audio aun lee y Windows reporta un crash (access violation).
+    # No se pierde nada: la transcripcion se escribe linea a linea y la
+    # auditoria por Claude Code corre en un proceso aparte.
+    os._exit(0)
 
 
 if __name__ == "__main__":
@@ -677,25 +1094,37 @@ if __name__ == "__main__":
     parser.add_argument("--intervalo", type=int, default=20,
                         help="segundos entre analisis SPIN (defecto: 20)")
     parser.add_argument("--cierre", action="store_true",
-                        help="arranca en modo llamada de cierre (oferta/objeciones)")
-    parser.add_argument("--modelo", choices=list(MODELOS_VIVO), default="max",
-                        help="cerebro del analisis en vivo: economico (GLM-5.2 "
-                             "abierto, ~$0.50/llamada), premium (Sonnet 5, "
-                             "~$0.90) o max (Opus 4.8, ~$1.50; defecto)")
-    parser.add_argument("--negocio", default=NEGOCIO_DEFECTO,
-                        help="que negocio se vende: carpeta en negocios/ con su "
-                             "negocio.md y objeciones.md (defecto: imperio)")
+                        help="venta en 2 llamadas y hoy toca la de cierre")
+    parser.add_argument("--una-llamada", action="store_true",
+                        help="toda la venta en una sola llamada (indagar + cerrar)")
+    parser.add_argument("--modelo", choices=list(MODELOS_VIVO),
+                        help="cerebro del analisis en vivo: max (Opus 5, ~$1.50 "
+                             "por llamada; defecto), economico (Sonnet 5, ~$0.60-0.90) "
+                             "o glm (GLM-5.2 abierto via Workers AI, ~$0.50)")
+    parser.add_argument("--negocio",
+                        help="que negocio se vende: carpeta en negocios/ (defecto: "
+                             "el ultimo usado; tambien se cambia y se edita en la "
+                             "ventana 'Tu negocio')")
     parser.add_argument("--oferta", metavar="NOMBRE",
                         help="oferta a priorizar HOY (ej. 'imperio' o 'agencia'; "
                              "basta parte del nombre; tambien cambiable en la "
                              "ventana con el selector 'Vender:')")
     args = parser.parse_args()
 
-    if args.cierre:
+    prefs = leer_preferencias()
+    if args.una_llamada:
+        modo_analisis["valor"] = "completa"
+    elif args.cierre:
         modo_analisis["valor"] = "cierre"
-    modelo_vivo["valor"] = args.modelo
-    if args.negocio != prompts_activos["nombre"]:
-        prompts_activos = cargar_prompts(args.negocio)
+    elif prefs.get("llamadas") == 1:
+        modo_analisis["valor"] = "completa"
+    modelo = args.modelo or prefs.get("modelo")
+    modelo_vivo["valor"] = modelo if modelo in MODELOS_VIVO else "max"
+    negocio = args.negocio or prefs.get("negocio") or NEGOCIO_DEFECTO
+    if not args.negocio and negocio not in negocios_disponibles():
+        negocio = NEGOCIO_DEFECTO  # la carpeta recordada ya no existe
+    if negocio != prompts_activos["nombre"]:
+        prompts_activos = cargar_prompts(negocio)
     if args.oferta:
         buscada = args.oferta.strip().lower()
         oferta_objetivo["valor"] = next(

@@ -18,21 +18,30 @@ con el selector de arriba de la ventana en cualquier momento:
 ## Uso en llamadas reales
 
 ```
-python copiloto.py                        # arranca en modo 1ª llamada (SPIN)
-python copiloto.py --cierre               # arranca directo en modo cierre
-python copiloto.py --modelo premium       # cerebro: economico | premium | max
+python copiloto.py                        # arranca como lo dejaste la última vez
+python copiloto.py --cierre               # venta en 2 llamadas, hoy toca la de cierre
+python copiloto.py --una-llamada          # toda la venta en una sola llamada
+python copiloto.py --modelo economico     # cerebro: economico | max
 python copiloto.py --negocio demo-boletas # vender OTRO negocio (ver negocios/)
 python copiloto.py --oferta imperio       # fijar la oferta a vender HOY
 ```
 
 **Multi-negocio:** cada negocio vive en `negocios/<nombre>/` con su
 `negocio.md` (qué se vende, avatares, prueba social, reglas de voz) y su
-`objeciones.md`. Para crear uno nuevo: copia `negocios/_plantilla/`, llénala y
-arranca con `--negocio <nombre>`. El de Diego es `negocios/imperio/` (defecto).
+`objeciones.md`. Se crean y editan desde la ventana: botón **Tu negocio** →
+*Nuevo negocio…* → pegar el material del negocio (o adjuntar PDF/TXT) →
+**Organizar con IA** → revisar → **Guardar y usar en la llamada** (el copiloto
+lo toma sin reiniciar y lo recuerda). La pestaña *Prospecto de hoy* edita el
+`contexto_llamada.md`. El de Diego es `negocios/imperio/` (defecto).
 
-**Selector de modelo** (también en la ventana, cambiable en vivo):
-Económico = GLM-5.2 (~$0,50/llamada, requiere Workers Paid en Cloudflare) ·
-Premium = Sonnet 5 (~$0,90) · Máx = Opus 4.8 (~$1,50, defecto).
+**Cómo vendes** (arriba en la ventana; se recuerda en `preferencias.json`):
+*1 llamada* (indaga + presenta + precio + cierre en la misma llamada) o
+*2 llamadas* (eliges si hoy toca la 1ª de indagación o la 2ª de cierre).
+
+**Selector de modelo** (en Ajustes, cambiable en vivo): Máx = Opus 5 (~$1,50
+por llamada de 30 min, defecto) · Económico = Sonnet 5 (~$0,60-0,90). Los dos
+con la misma clave de Anthropic. GLM-5.2 abierto (~$0,50, exige Workers Paid
+en Cloudflare) quedó solo por flag: `--modelo glm`.
 
 **Selector "Vender:"** (en la ventana, cambiable en vivo): fija qué oferta del
 negocio priorizar HOY (las lee de los encabezados `## Oferta N — NOMBRE` del
@@ -80,6 +89,8 @@ python test_cierre.py                  # prueba E2E del modo cierre (transcripci
 |---|---|
 | `copiloto.py` | La aplicación completa (ventana + audio + Deepgram + IA) |
 | `prompt_spin.py` | El MÉTODO universal (SPIN, cierre, auditoría) + carga del negocio |
+| `ventana_negocio.py` | Ventana "Tu negocio": cargar/editar lo que vendes, con organizador por IA |
+| `test_ventana.py` | Vista previa de las ventanas con datos de ejemplo (sin audio ni API) |
 | `negocios/<nombre>/` | El NEGOCIO: `negocio.md` + `objeciones.md` (+ `contexto_llamada.md`) |
 | `negocios/_plantilla/` | Plantilla para crear un negocio nuevo |
 | `contexto_llamada.md` | Info del prospecto de HOY (flujo clásico; editar antes de cada llamada) |
@@ -90,7 +101,8 @@ python test_cierre.py                  # prueba E2E del modo cierre (transcripci
 ## Costos aproximados
 
 - Deepgram: ~$0.92/hora de llamada (2 streams). Crédito inicial: $200 gratis.
-- Claude (Opus 4.8): ~$3-5/hora de llamada con análisis cada 20s.
+- Claude Máx (Opus 5): ~$3/hora de llamada con análisis cada 20s; Económico
+  (Sonnet 5): ~$1.20-1.80/hora.
 
 ## Próximas mejoras (pendientes)
 

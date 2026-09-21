@@ -22,18 +22,15 @@ post-llamada.
 
 ## Instalación (una sola vez, ~10 minutos)
 
-**1. Descarga el proyecto.** Botón verde **Code → Download ZIP** aquí en GitHub
-y descomprímelo donde quieras (o `git clone` si sabes usarlo).
+**1. Instala Python 3.12** si no lo tienes
+([descargar aquí](https://www.python.org/downloads/release/python-3129/) →
+*Windows installer (64-bit)*). Al instalar, marca la casilla **"Add python.exe
+to PATH"**.
 
-**2. Instala las dependencias.** Abre una terminal (PowerShell) en la carpeta
-del proyecto y corre:
+**2. Descarga el proyecto.** Botón verde **Code → Download ZIP** aquí en GitHub
+y descomprímelo donde quieras (por ejemplo en Documentos).
 
-```
-cd copiloto-spin
-pip install -r requirements.txt
-```
-
-**3. Crea tus claves de API** (cada persona usa las suyas):
+**3. Crea tus dos claves de API** (cada persona usa las suyas):
 
 - **Deepgram** (transcripción): crea cuenta gratis en
   [console.deepgram.com](https://console.deepgram.com) — te regalan **$200 de
@@ -45,29 +42,42 @@ pip install -r requirements.txt
   Billing*: con **$5–10 USD** alcanza para varias llamadas (~$1.50 por llamada
   de 30 minutos).
 
-**4. Pega tus claves.** En la carpeta `copiloto-spin/`, copia el archivo
-`.env.example`, renombra la copia a `.env` (exactamente así, con el punto) y
-ábrelo con el Bloc de notas para pegar tus dos claves. **El `.env` es personal:
+**4. Doble clic en `INSTALAR.bat`.** Instala lo necesario y te abre el archivo
+de claves en el Bloc de notas: pega tus dos claves donde dice
+`pega_aqui_tu_clave...`, guarda y cierra. **Ese archivo (`.env`) es personal:
 no lo compartas con nadie.**
 
-**5. Prueba que todo funciona.** Pon un video en YouTube sonando y corre:
+**5. Doble clic en `ABRIR COPILOTO.bat`.** Se abre la ventana flotante. Para
+probar sin estar en una llamada, pon un video de YouTube con alguien hablando:
+en unos segundos ves la transcripción y, a los ~25 segundos, la primera
+sugerencia. 🎉
 
-```
-python copiloto.py --consola 45
-```
+> Si Windows muestra un aviso azul "Windows protegió su PC" al abrir un `.bat`,
+> es normal en archivos descargados: *Más información → Ejecutar de todas formas*.
 
-Si en ~45 segundos ves la transcripción del video y una sugerencia de Claude,
-estás listo. 🎉
-
-## Uso en llamadas reales
+<details>
+<summary>Instalación manual por terminal (si prefieres)</summary>
 
 ```
 cd copiloto-spin
-python copiloto.py                 # 1ª llamada (indagación SPIN)
-python copiloto.py --cierre        # llamada de cierre (oferta y precio)
+pip install -r requirements.txt
+copy .env.example .env      # y pega tus claves en .env
+python copiloto.py --consola 45   # prueba en consola con un video sonando
 ```
+</details>
 
-Se abre la ventana flotante siempre visible. Reglas de oro:
+## Uso en llamadas reales
+
+Doble clic en **`ABRIR COPILOTO.bat`** (o `python copiloto.py` dentro de
+`copiloto-spin/`). Se abre la ventana flotante siempre visible. Arriba le dices **cómo vendes**
+(queda guardado para la próxima vez):
+
+- **Vendo en 1 llamada:** indagas, presentas, das el precio y cierras en la
+  misma llamada. El copiloto te lleva por todo el recorrido.
+- **Vendo en 2 llamadas:** marcas cuál toca hoy — *1ª: indagar* (preguntas
+  SPIN) o *2ª: cerrar la venta* (oferta, precio y objeciones).
+
+Reglas de oro:
 
 1. Usa **audífonos** (si no, tu micrófono capta la voz del prospecto y se duplica).
 2. **Nunca compartas la pantalla completa** — comparte solo la ventana de tu
@@ -81,15 +91,25 @@ contexto del prospecto del día) está en
 ## Configurar TU negocio (para alumnos con oferta propia)
 
 El copiloto viene configurado por defecto con la oferta de Imperio (Diego).
-Si vendes otra cosa:
+Si vendes otra cosa, se lo cargas desde la misma ventana, sin tocar carpetas:
 
-1. Copia la carpeta `copiloto-spin/negocios/_plantilla/` y renómbrala con el
-   nombre de tu negocio (ej.: `negocios/mi-agencia/`).
-2. Llena `negocio.md` (qué vendes, precios, avatares, prueba social) y
-   `objeciones.md` (tus objeciones con sus respuestas).
-3. Arranca con: `python copiloto.py --negocio mi-agencia`
+1. Pulsa el botón **Tu negocio** (arriba a la derecha) → menú del nombre →
+   **Nuevo negocio…** y ponle nombre.
+2. **Pega todo lo que tengas** de tu negocio, en cualquier orden: el texto de
+   tu página, el guion de tu video de ventas, precios, testimonios, chats con
+   clientes, las objeciones que te ponen. También puedes adjuntar PDF o TXT.
+3. Pulsa **Organizar con IA** (1 a 3 minutos, unos centavos de tu clave de
+   Anthropic). La IA arma dos documentos: *Lo que vendo* y *Objeciones*. Lo
+   que no encontró lo marca como `[FALTA: …]` para que lo completes.
+4. Revisa, corrige lo que quieras y pulsa **Guardar y usar en la llamada**. El
+   copiloto empieza a vender ese negocio de inmediato y lo recuerda.
 
-Hay un ejemplo completo ya lleno en `negocios/demo-boletas/`.
+En la pestaña **Prospecto de hoy** pegas lo que sepas de la persona de la
+llamada (formulario, chat previo); eso manda sobre todo lo demás.
+
+Si prefieres llenarlo a mano, cada pestaña trae una guía. Hay un ejemplo
+completo en `negocios/demo-boletas/`. Todo se guarda en
+`copiloto-spin/negocios/<tu-negocio>/`.
 
 ## Auditoría post-llamada
 
@@ -110,11 +130,11 @@ Las transcripciones y auditorías se guardan solas en `copiloto-spin/llamadas/`
 | Servicio | Costo | Nota |
 |---|---|---|
 | Deepgram (transcripción) | ~$0.92/hora | los $200 gratis dan ~200 horas |
-| Claude modelo **max** (Opus) | ~$3/hora | el mejor; es el defecto |
-| Claude modelo **premium** (Sonnet) | ~$1.80/hora | casi igual de bueno |
+| Claude modelo **Máx** (Opus 5) | ~$3/hora | el mejor; es el defecto |
+| Claude modelo **Económico** (Sonnet 5) | ~$1.20-1.80/hora | casi igual de bueno |
 
-El modelo se cambia en vivo con el selector de la ventana o con
-`--modelo premium`.
+Los dos usan la misma clave de Anthropic. El modelo se cambia en vivo en
+**Ajustes** (abajo en la ventana) o con `--modelo economico`.
 
 ## Problemas comunes
 

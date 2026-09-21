@@ -19,3 +19,6 @@ __pycache__/
 *.pyc
 *.wav
 .claude/settings.local.json
+
+# Lo que cada vendedor eligio en su ventana (como vende, negocio, modelo)
+copiloto-spin/preferencias.json

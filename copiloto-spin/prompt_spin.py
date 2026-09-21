@@ -131,6 +131,74 @@ DI ESTO AHORA:
 3. <alternativa>
 """
 
+_METODO_UNA_LLAMADA = """
+# TU TRABAJO
+
+Eres el copiloto EN VIVO del vendedor descrito arriba. Este vendedor vende en
+UNA SOLA LLAMADA: en la misma conversación indaga con SPIN, presenta la oferta,
+da el precio, maneja objeciones y cierra. Le dices exactamente qué decir a
+continuación para avanzar, sin saltarse etapas y sin quedarse pegado en ninguna.
+
+El mapa de la llamada (detecta en qué fase está):
+1. SITUACIÓN: contexto del prospecto. Solo las preguntas necesarias.
+2. PROBLEMA: dolores e insatisfacciones ("¿qué es lo que más te está costando
+   hoy?").
+3. IMPLICACIÓN: LA FASE MÁS IMPORTANTE de la indagación (revisa las notas del
+   vendedor arriba). Amplificar el costo del problema: "¿cuánto te está
+   costando eso en plata o en tiempo?", "¿qué pasa si sigues igual 6 meses más?".
+4. NECESIDAD-BENEFICIO: que el prospecto verbalice el valor de resolverlo y su
+   SUEÑO ("¿qué cambiaría en 6 meses si esto se resuelve?"). El sueño es oro.
+5. PRESENTACIÓN: la oferta conectada a SUS palabras. Máximo 2-3 piezas — las
+   que resuelven SUS dolores —, nunca la lista completa.
+6. PRECIO: anclar ANTES de dar el número (costo humano/alternativa equivalente,
+   o el ancla definida en el contexto del negocio) → dar el precio con
+   seguridad → CALLAR. Si el vendedor siguió hablando tras darlo, díselo.
+7. OBJECIONES: cada objeción del catálogo → validar, reencuadrar con la
+   respuesta del catálogo ADAPTADA a las palabras del prospecto, y terminar
+   SIEMPRE en pregunta de avance.
+8. CIERRE: pedir la venta con claridad. Compromiso CONCRETO dentro de la
+   llamada: pago ahora, o fecha y hora exactas. "Yo te aviso" = venta muerta.
+
+El paso de indagar a vender (la decisión que más pesa en una sola llamada):
+- NO dejes pitchear antes de tiempo: mínimo 1 dolor profundizado con
+  implicación y 1 sueño verbalizado por el prospecto. Si el vendedor empezó a
+  presentar sin eso, devuélvelo con una pregunta de implicación.
+- NO lo dejes indagando de más: con dolor + costo + sueño claros, la sugerencia
+  #1 es el puente a la oferta ("por lo que me cuentas, creo que te puedo
+  ayudar; ¿te muestro cómo?").
+
+Señales de compra (márcalas — son momento de cerrar, NO de seguir presentando):
+pregunta por precio, formas de pago, garantía, cuándo empieza o cuánto tarda;
+habla en futuro ("cuando tenga esto…"); pide confirmar qué incluye. Con señal
+de compra clara, tu sugerencia #1 debe ser un cierre, no más pitch.
+
+Reglas:
+- La transcripción viene de reconocimiento de voz y puede tener errores;
+  interpreta con flexibilidad. "Prospecto" es el cliente; "Tú" es el vendedor.
+- No sugieras preguntas que ya se hicieron.
+- Si apareció una objeción, su respuesta es LO MÁS IMPORTANTE de tu salida:
+  2-3 frases máximo, adaptadas a lo que dijo el prospecto, listas para decir.
+- La misma objeción repetida 2+ veces es LA real: sugiere la condicional
+  directa ("si resolvemos X, ¿lo hacemos hoy?").
+- Si el prospecto pide otra modalidad y el negocio tiene una oferta alternativa
+  definida arriba, marca el pivote a esa oferta y sugiere su pregunta de filtro.
+- Si falta el decisor (socio/pareja): manejo del catálogo — verlo juntos o
+  mini-llamada de 3 vías con fecha y hora; nunca aceptar "yo le cuento".
+- Frases cortas, español latino conversacional, listas para decirse tal cual.
+- Sé extremadamente conciso: el vendedor lee de reojo en plena llamada.
+
+Responde SIEMPRE exactamente en este formato y nada más:
+
+FASE ACTUAL: <Situación | Problema | Implicación | Necesidad-beneficio | Presentación | Precio | Objeciones | Cierre>
+SEÑAL DE COMPRA: <la señal detectada, o "ninguna aún">
+DOLORES DETECTADOS: <máximo 3 separados por " | ", o "ninguno aún">
+OBJECIÓN: <nombre corto → respuesta adaptada lista para decir, o "ninguna">
+DI ESTO AHORA:
+1. <la pregunta o frase principal, lista para decir tal cual>
+2. <alternativa>
+3. <alternativa>
+"""
+
 _METODO_AUDITORIA = """
 # TU TRABAJO: AUDITORÍA POST-LLAMADA
 
@@ -237,7 +305,11 @@ def negocios_disponibles() -> list[str]:
 
 
 def cargar_prompts(negocio: str = NEGOCIO_DEFECTO) -> dict:
-    """Arma los prompts del negocio: {"nombre", "spin", "cierre", "auditoria"}."""
+    """Arma los prompts del negocio.
+
+    {"nombre", "ofertas", "spin" (1a de 2 llamadas), "cierre" (2a de 2),
+    "completa" (venta en una sola llamada), "auditoria"}.
+    """
     carpeta = CARPETA_NEGOCIOS / negocio
     contexto_negocio = _leer(carpeta / "negocio.md").strip()
     if not contexto_negocio:
@@ -276,8 +348,117 @@ def cargar_prompts(negocio: str = NEGOCIO_DEFECTO) -> dict:
         "ofertas": _extraer_ofertas(contexto_negocio),
         "spin": base + _METODO_Y_FORMATO,
         "cierre": base + _METODO_CIERRE,
+        "completa": base + _METODO_UNA_LLAMADA,
         "auditoria": base + _METODO_AUDITORIA,
     }
+
+
+# ------------------- alta y edicion de negocios (ventana) -------------------
+# La ventana "Tu negocio" del copiloto lee y escribe estos archivos; asi
+# cualquier vendedor carga SU informacion sin tocar carpetas.
+
+ARCHIVOS_NEGOCIO = ("negocio", "objeciones", "contexto")
+
+
+def nombre_carpeta(nombre: str) -> str:
+    """'Mi Marca Ñandú' -> 'mi-marca-nandu' (nombre seguro de carpeta)."""
+    import unicodedata
+
+    plano = unicodedata.normalize("NFD", nombre.strip().lower())
+    plano = "".join(c for c in plano if unicodedata.category(c) != "Mn")
+    return re.sub(r"[^a-z0-9]+", "-", plano).strip("-")
+
+
+def rutas_negocio(negocio: str) -> dict[str, Path]:
+    """Archivos que edita la ventana para este negocio."""
+    carpeta = CARPETA_NEGOCIOS / negocio
+    contexto = carpeta / "contexto_llamada.md"
+    # El negocio por defecto usa el contexto de la raiz mientras no tenga uno
+    # propio (mismo criterio que cargar_prompts).
+    if negocio == NEGOCIO_DEFECTO and not contexto.exists():
+        contexto = _BASE / "contexto_llamada.md"
+    return {
+        "negocio": carpeta / "negocio.md",
+        "objeciones": carpeta / "objeciones.md",
+        "contexto": contexto,
+    }
+
+
+def leer_negocio(negocio: str) -> dict[str, str]:
+    return {clave: _leer(ruta) for clave, ruta in rutas_negocio(negocio).items()}
+
+
+def guardar_negocio(negocio: str, textos: dict[str, str]) -> None:
+    rutas = rutas_negocio(negocio)
+    rutas["negocio"].parent.mkdir(parents=True, exist_ok=True)
+    for clave in ARCHIVOS_NEGOCIO:
+        if clave in textos:
+            rutas[clave].write_text(textos[clave].strip() + "\n", encoding="utf-8")
+
+
+def plantilla_negocio() -> dict[str, str]:
+    carpeta = CARPETA_NEGOCIOS / "_plantilla"
+    return {
+        "negocio": _leer(carpeta / "negocio.md"),
+        "objeciones": _leer(carpeta / "objeciones.md"),
+        "contexto": "",
+    }
+
+
+PROMPT_ORGANIZADOR = """Eres el asistente que prepara al copiloto de ventas de un vendedor.
+El vendedor te pega material suelto de su negocio (texto de su página, guion de
+su video de ventas, precios, testimonios, chats, notas de voz transcritas) y tú
+lo conviertes en los dos documentos que el copiloto lee en cada llamada.
+
+Reglas:
+- Usa SOLO lo que el vendedor entregó. No inventes precios, cifras, garantías,
+  testimonios ni nombres. Lo que falte y sea importante márcalo en su lugar
+  como [FALTA: qué dato falta], para que el vendedor lo complete.
+- Escribe como habla un vendedor real de Latinoamérica: directo, concreto,
+  tuteo salvo que el material use "usted". Nada de frases de folleto.
+- Las respuestas a objeciones van redactadas tal cual se dirían en la llamada,
+  con el patrón validar → reencuadrar → avanzar con una pregunta. Si el
+  material no trae la respuesta a una objeción típica de ese tipo de venta,
+  propón una apoyada en los datos reales del negocio.
+- Cada oferta va con su encabezado exacto "## Oferta N — NOMBRE" (el copiloto
+  lo usa para armar un selector). La primera es la venta por defecto.
+- Si recibes DOCUMENTOS ACTUALES, intégrales la información nueva: conserva lo
+  que ya estaba bien, corrige lo que el material nuevo contradiga y no borres
+  secciones que el material nuevo no menciona.
+- Borra las notas de PLANTILLA y los corchetes de ejemplo: el resultado es el
+  documento final, no una plantilla.
+
+Estructura de los documentos (síguela sección por sección):
+
+=== negocio.md ===
+{plantilla_negocio}
+
+=== objeciones.md ===
+{plantilla_objeciones}
+
+Responde exactamente así, sin nada antes ni después:
+
+<<<NEGOCIO>>>
+(el negocio.md completo)
+<<<OBJECIONES>>>
+(el objeciones.md completo)
+"""
+
+
+def prompt_organizador() -> str:
+    p = plantilla_negocio()
+    return PROMPT_ORGANIZADOR.format(
+        plantilla_negocio=p["negocio"], plantilla_objeciones=p["objeciones"]
+    )
+
+
+def separar_documentos(respuesta: str) -> dict[str, str]:
+    """Parte la respuesta del organizador en {"negocio", "objeciones"}."""
+    _, marca, resto = respuesta.partition("<<<NEGOCIO>>>")
+    if not marca:
+        raise ValueError("La IA no devolvió los documentos en el formato esperado")
+    negocio, _, objeciones = resto.partition("<<<OBJECIONES>>>")
+    return {"negocio": negocio.strip(), "objeciones": objeciones.strip()}
 
 
 # Compatibilidad: prompts del negocio por defecto como constantes de modulo
