@@ -38,7 +38,16 @@ lo toma sin reiniciar y lo recuerda). La pestaña *Prospecto de hoy* edita el
 *1 llamada* (indaga + presenta + precio + cierre en la misma llamada) o
 *2 llamadas* (eliges si hoy toca la 1ª de indagación o la 2ª de cierre).
 
-**Selector de modelo** (en Ajustes, cambiable en vivo): Máx = Opus 5 (~$1,50
+**Apertura de la llamada** (fila "Apertura" de la ventana): si tu `negocio.md`
+tiene la sección `## Apertura de la llamada` con pasos `### 1. Título`, el
+copiloto te muestra esos guiones al abrir, marca en ámbar los que te faltan y
+con ✓ los que ya dijiste, y te recuerda los pendientes durante la llamada
+(clic en una ficha = ver su guion). No aplica en la 2ª llamada (cierre).
+
+**Si se cae la conexión** con Deepgram o parpadea el internet, la escucha se
+reconecta sola en segundos (verás "Reconectando la escucha…" arriba).
+
+**Selector de modelo** (en Ajustes, cambiable en vivo): Máx = Opus 5.5 (~$1,30
 por llamada de 30 min, defecto) · Económico = Sonnet 5 (~$0,60-0,90). Los dos
 con la misma clave de Anthropic. GLM-5.2 abierto (~$0,50, exige Workers Paid
 en Cloudflare) quedó solo por flag: `--modelo glm`.
@@ -101,7 +110,7 @@ python test_cierre.py                  # prueba E2E del modo cierre (transcripci
 ## Costos aproximados
 
 - Deepgram: ~$0.92/hora de llamada (2 streams). Crédito inicial: $200 gratis.
-- Claude Máx (Opus 5): ~$3/hora de llamada con análisis cada 20s; Económico
+- Claude Máx (Opus 5.5): ~$2.50/hora de llamada con análisis cada 20s; Económico
   (Sonnet 5): ~$1.20-1.80/hora.
 
 ## Próximas mejoras (pendientes)

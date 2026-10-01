@@ -7,6 +7,8 @@ sugerencia de ejemplo para revisar el diseño.
   python test_ventana.py completa          # venta en una sola llamada
   python test_ventana.py negocio           # abre además la ventana "Tu negocio"
   python test_ventana.py ia                # "Tu negocio" en la vista Completar con IA
+  python test_ventana.py inicio            # recién abierta: la apertura lista para leer
+  python test_ventana.py apertura          # arrancando la llamada, con pasos pendientes
   python test_ventana.py spin foto.png     # guarda una captura y se cierra
 """
 
@@ -14,7 +16,18 @@ import sys
 
 import copiloto
 
+APERTURA = """FASE ACTUAL: Apertura
+APERTURA PENDIENTE: 2, 3
+AVATAR: aún no claro
+DOLORES DETECTADOS: ninguno aún
+OBJECIÓN: ninguna
+PREGUNTA AHORA:
+1. Las decisiones importantes de tu negocio, ¿las tomas tú solo o con alguien más?
+2. ¿A qué se dedica tu negocio hoy y cómo te llegan los clientes?
+3. ¿Qué has probado hasta ahora para vender más?"""
+
 SPIN = """FASE ACTUAL: Implicación
+APERTURA PENDIENTE: 2
 AVATAR: Empleado que quiere montar agencia con IA
 DOLORES DETECTADOS: Trabaja 10 horas y no le alcanza | No sabe conseguir clientes | Probó cursos y no aplicó nada
 OBJECIÓN: No tengo tiempo → Justo por eso: el sistema está hecho para montarse en 1 hora al día sin dejar tu trabajo.
@@ -55,9 +68,14 @@ if __name__ == "__main__":
     copiloto.modo_analisis["valor"] = modo
     v = copiloto.modo_ventana(20, arrancar_nucleo=False)
     v.ui.put(("estado", "Escuchando (Prospecto)"))
-    for linea in LINEAS:
-        v.ui.put(("linea", linea))
-    v.ui.put(("sugerencia", {"spin": SPIN, "cierre": CIERRE, "completa": COMPLETA}[modo]))
+    if vista_pedida == "apertura":
+        v.ui.put(("linea", "Prospecto: Hola Diego, ¿me escuchas bien?"))
+        v.ui.put(("linea", "Tú: Perfecto. Te cuento cómo va a ser esta llamada..."))
+        v.ui.put(("sugerencia", APERTURA))
+    elif vista_pedida != "inicio":
+        for linea in LINEAS:
+            v.ui.put(("linea", linea))
+        v.ui.put(("sugerencia", {"spin": SPIN, "cierre": CIERRE, "completa": COMPLETA}[modo]))
     if modo == "cierre":
         v.alternar_ajustes()
 

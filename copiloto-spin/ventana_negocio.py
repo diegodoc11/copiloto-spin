@@ -20,7 +20,7 @@ from anthropic import Anthropic
 import prompt_spin
 from config import ANTHROPIC_API_KEY
 
-MODELO_ORGANIZADOR = "claude-opus-5"  # redaccion en español: siempre el mejor
+MODELO_ORGANIZADOR = "claude-opus-5-5"  # redaccion en español: siempre el mejor
 MAX_ADJUNTOS_BYTES = 20 * 1024 * 1024
 
 PESTANAS = (
@@ -73,6 +73,7 @@ def organizar_con_ia(material: str, adjuntos: list[Path], actuales: dict[str, st
         model=MODELO_ORGANIZADOR,
         max_tokens=32000,
         thinking={"type": "adaptive"},
+        output_config={"effort": "high"},
         system=prompt_spin.prompt_organizador(),
         messages=[{"role": "user", "content": contenido}],
     ) as stream:

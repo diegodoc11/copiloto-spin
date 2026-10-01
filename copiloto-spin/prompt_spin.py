@@ -23,6 +23,31 @@ _BASE = Path(__file__).parent
 CARPETA_NEGOCIOS = _BASE / "negocios"
 NEGOCIO_DEFECTO = "imperio"
 
+# La apertura va en los dos metodos que arrancan una llamada desde cero (1a de
+# 2 llamadas y venta en una sola); los guiones los pone cada negocio.
+_APERTURA = """
+La APERTURA (va antes de la primera pregunta de Situación): si el negocio
+define arriba una sección "Apertura de la llamada", el vendedor debe decir sus
+pasos numerados al arrancar, justo después del saludo. Se le suelen olvidar y
+le cuesta la venta: tu trabajo es que no se le pasen.
+- Un paso está HECHO si el vendedor ya lo dijo con sus palabras (no tiene que
+  ser textual). Un paso que es PREGUNTA también está hecho si el prospecto ya
+  dio esa información completa por su cuenta.
+- Mientras la llamada esté en el saludo o recién arrancando y falten pasos:
+  FASE ACTUAL es "Apertura" y la línea 1 es el primer paso pendiente resumido
+  en una frase (la ventana le muestra al vendedor el guion completo). Las
+  líneas 2 y 3 son las preguntas con las que sigue al terminar la apertura.
+- Si el prospecto ya está contando su caso, NO devuelvas al vendedor a la
+  apertura: sigue con el método. El paso de explicar cómo va a ser la llamada
+  ya no aplica y deja de estar pendiente. Los pasos que son PREGUNTAS siguen
+  pendientes hasta que se hagan: mete uno como línea 2 o 3 en una pausa
+  natural; y si el vendedor va a presentar la oferta o el precio sin haber
+  preguntado quién toma la decisión, esa pregunta es la línea 1.
+- Si el vendedor se pone a mostrar o explicar su producto antes de indagar,
+  la línea 1 lo devuelve a preguntar.
+- Sin sección de apertura en el negocio: APERTURA PENDIENTE es "nada".
+"""
+
 _METODO_Y_FORMATO = """
 # TU TRABAJO
 
@@ -41,7 +66,7 @@ El método SPIN:
 - Necesidad-beneficio: que el prospecto verbalice el valor de resolverlo: "¿qué
   cambiaría en tu vida en 6 meses si esto se resuelve?", "¿cuánto te gustaría
   estar generando?". El SUEÑO es oro: amplificarlo antes de pitchear.
-
+""" + _APERTURA + """
 Reglas:
 - La transcripción viene de reconocimiento de voz y puede tener errores;
   interpreta con flexibilidad. "Prospecto" es el cliente; "Tú" es el vendedor.
@@ -58,10 +83,16 @@ Reglas:
 - Preguntas cortas, naturales, en español conversacional latino, listas para
   decirse tal cual.
 - Sé extremadamente conciso: el vendedor lee de reojo en plena llamada.
+- Solo los campos del formato: nada de notas, consejos ni párrafos antes o
+  después (lo que esté fuera del formato NO se muestra). Cada línea
+  numerada es UNA sola frase para decir, sin acotaciones entre paréntesis.
+  Si hay una jugada clave (p. ej. "después del precio, calla"), va como
+  parte de la línea numerada, no aparte.
 
 Responde SIEMPRE exactamente en este formato y nada más:
 
-FASE ACTUAL: <Situación | Problema | Implicación | Necesidad-beneficio | Cierre>
+FASE ACTUAL: <Apertura | Situación | Problema | Implicación | Necesidad-beneficio | Cierre>
+APERTURA PENDIENTE: <números de los pasos de la apertura que faltan, p. ej. "2, 3"; o "nada">
 AVATAR: <el avatar del catálogo que mejor encaje, o "aún no claro">
 DOLORES DETECTADOS: <máximo 3 separados por " | ", o "ninguno aún">
 OBJECIÓN: <nombre corto → respuesta en 1-2 frases, o "ninguna">
@@ -119,6 +150,11 @@ Reglas:
   mini-llamada de 3 vías con fecha y hora; nunca aceptar "yo le cuento".
 - Frases cortas, español latino conversacional, listas para decirse tal cual.
 - Sé extremadamente conciso: el vendedor lee de reojo en plena llamada.
+- Solo los campos del formato: nada de notas, consejos ni párrafos antes o
+  después (lo que esté fuera del formato NO se muestra). Cada línea
+  numerada es UNA sola frase para decir, sin acotaciones entre paréntesis.
+  Si hay una jugada clave (p. ej. "después del precio, calla"), va como
+  parte de la línea numerada, no aparte.
 
 Responde SIEMPRE exactamente en este formato y nada más:
 
@@ -166,7 +202,7 @@ El paso de indagar a vender (la decisión que más pesa en una sola llamada):
 - NO lo dejes indagando de más: con dolor + costo + sueño claros, la sugerencia
   #1 es el puente a la oferta ("por lo que me cuentas, creo que te puedo
   ayudar; ¿te muestro cómo?").
-
+""" + _APERTURA + """
 Señales de compra (márcalas — son momento de cerrar, NO de seguir presentando):
 pregunta por precio, formas de pago, garantía, cuándo empieza o cuánto tarda;
 habla en futuro ("cuando tenga esto…"); pide confirmar qué incluye. Con señal
@@ -186,10 +222,16 @@ Reglas:
   mini-llamada de 3 vías con fecha y hora; nunca aceptar "yo le cuento".
 - Frases cortas, español latino conversacional, listas para decirse tal cual.
 - Sé extremadamente conciso: el vendedor lee de reojo en plena llamada.
+- Solo los campos del formato: nada de notas, consejos ni párrafos antes o
+  después (lo que esté fuera del formato NO se muestra). Cada línea
+  numerada es UNA sola frase para decir, sin acotaciones entre paréntesis.
+  Si hay una jugada clave (p. ej. "después del precio, calla"), va como
+  parte de la línea numerada, no aparte.
 
 Responde SIEMPRE exactamente en este formato y nada más:
 
-FASE ACTUAL: <Situación | Problema | Implicación | Necesidad-beneficio | Presentación | Precio | Objeciones | Cierre>
+FASE ACTUAL: <Apertura | Situación | Problema | Implicación | Necesidad-beneficio | Presentación | Precio | Objeciones | Cierre>
+APERTURA PENDIENTE: <números de los pasos de la apertura que faltan, p. ej. "2, 3"; o "nada">
 SEÑAL DE COMPRA: <la señal detectada, o "ninguna aún">
 DOLORES DETECTADOS: <máximo 3 separados por " | ", o "ninguno aún">
 OBJECIÓN: <nombre corto → respuesta adaptada lista para decir, o "ninguna">
@@ -249,7 +291,9 @@ Desglose: Rapport X/10 | Indagación (S+P) X/10 | Implicación X/10 |
 Sueño/Necesidad-beneficio X/10 | Pitch X/10 | Objeciones X/10 | Cierre X/10
 ## Radiografía rápida
 (quién habló más, cuántas preguntas hizo el vendedor, en qué momento pitcheó,
-cuánto duró cada fase, ¿estaba el decisor completo en la llamada?)
+cuánto duró cada fase, ¿estaba el decisor completo en la llamada?; si el
+negocio define una "Apertura de la llamada", cuáles de sus pasos hizo y
+cuáles se saltó)
 ## Lo que hiciste bien
 (con citas textuales)
 ## Errores y oportunidades perdidas
@@ -293,6 +337,36 @@ def _extraer_ofertas(contexto_negocio: str) -> list[str]:
     return ofertas
 
 
+_PATRON_APERTURA = re.compile(
+    r"^##\s*Apertura\b[^\n]*\n(.*?)(?=^##\s|\Z)", re.MULTILINE | re.DOTALL
+)
+_PATRON_PASO = re.compile(r"^###\s*\d+[.)]?\s*(.+?)\s*$", re.MULTILINE)
+
+
+def _extraer_apertura(contexto_negocio: str) -> list[tuple[str, str]]:
+    """Pasos de la apertura de la llamada: [(titulo, guion), ...].
+
+    Salen de la seccion '## Apertura de la llamada' del negocio.md, un paso
+    por cada '### N. Titulo'. La ventana los muestra al arrancar (guion para
+    leer) y marca cuales faltan; el orden es el numero que usa el modelo en
+    APERTURA PENDIENTE.
+    """
+    seccion = _PATRON_APERTURA.search(contexto_negocio)
+    if not seccion:
+        return []
+    partes = _PATRON_PASO.split(seccion.group(1))[1:]  # [titulo, cuerpo, titulo, ...]
+    pasos = []
+    for titulo, cuerpo in zip(partes[::2], partes[1::2]):
+        parrafos = [
+            " ".join(linea.strip() for linea in parrafo.splitlines()).strip(' "“”')
+            for parrafo in re.split(r"\n\s*\n", cuerpo.strip())
+        ]
+        guion = "\n".join(p for p in parrafos if p)
+        if guion and not guion.startswith("["):  # "[...]" = plantilla sin llenar
+            pasos.append((titulo, guion))
+    return pasos
+
+
 def negocios_disponibles() -> list[str]:
     """Negocios utilizables: subcarpetas de negocios/ con negocio.md."""
     if not CARPETA_NEGOCIOS.exists():
@@ -307,8 +381,8 @@ def negocios_disponibles() -> list[str]:
 def cargar_prompts(negocio: str = NEGOCIO_DEFECTO) -> dict:
     """Arma los prompts del negocio.
 
-    {"nombre", "ofertas", "spin" (1a de 2 llamadas), "cierre" (2a de 2),
-    "completa" (venta en una sola llamada), "auditoria"}.
+    {"nombre", "ofertas", "apertura", "spin" (1a de 2 llamadas), "cierre"
+    (2a de 2), "completa" (venta en una sola llamada), "auditoria"}.
     """
     carpeta = CARPETA_NEGOCIOS / negocio
     contexto_negocio = _leer(carpeta / "negocio.md").strip()
@@ -346,6 +420,7 @@ def cargar_prompts(negocio: str = NEGOCIO_DEFECTO) -> dict:
     return {
         "nombre": negocio,
         "ofertas": _extraer_ofertas(contexto_negocio),
+        "apertura": _extraer_apertura(contexto_negocio),
         "spin": base + _METODO_Y_FORMATO,
         "cierre": base + _METODO_CIERRE,
         "completa": base + _METODO_UNA_LLAMADA,

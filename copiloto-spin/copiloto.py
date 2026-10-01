@@ -56,22 +56,23 @@ from config import (
 from prompt_spin import NEGOCIO_DEFECTO, cargar_prompts, negocios_disponibles
 
 CHUNK_MS = 100
-MODELO = "claude-opus-5"
+MODELO = "claude-opus-5-5"  # auditoria API de respaldo
 CARPETA_LLAMADAS = Path(__file__).parent / "llamadas"
 # Raiz del proyecto (donde vive .claude/skills/auditar-llamada): claude -p debe
 # correr desde ahi para que encuentre la skill.
 RAIZ_PROYECTO = Path(__file__).parent.parent
 
-# Tiers del analisis EN VIVO. La ventana ofrece dos: max = Opus 5 (el mejor,
-# ~$1.50/llamada de 30 min; mismo precio que Opus 4.8) y economico = Sonnet 5
-# (~$0.60-0.90; en el A/B del 2026-07-11 saco 7/8 vs 8/8 de Opus, ver
-# ab_modelos.md). Los dos corren con la MISMA clave de Anthropic, asi cualquier
+# Tiers del analisis EN VIVO. La ventana ofrece dos: max = Opus 5.5 (el mejor;
+# 20% mas barato que Opus 5 y en el A/B del 2026-09-23 sobre una llamada real
+# detecto un dolor mas y dio mejor pitch; escribe mas largo, por eso el prompt
+# le acota el formato) y economico = Sonnet 5 (~$0.60-0.90; en el A/B del
+# 2026-07-11 saco 7/8 vs 8/8 de Opus, ver ab_modelos.md). Los dos corren con la MISMA clave de Anthropic, asi cualquier
 # vendedor los usa sin montar nada mas. Fable 5.1 se descarto para el vivo:
 # cuesta el doble que Opus y siempre razona antes de responder (mas espera).
 # "glm" (GLM-5.2 abierto via Workers AI, ~$0.50) queda solo por flag: exige
 # cuenta de Cloudflare con Workers Paid, demasiada friccion para repartirlo.
 MODELOS_VIVO = {
-    "max": {"id": "claude-opus-5", "etiqueta": "Máx (Opus 5)"},
+    "max": {"id": "claude-opus-5-5", "etiqueta": "Máx (Opus 5.5)"},
     "economico": {"id": "claude-sonnet-5", "etiqueta": "Económico (Sonnet 5)"},
     "glm": {"id": None, "etiqueta": "GLM-5.2"},
 }
@@ -92,8 +93,8 @@ solicitar_auditoria = threading.Event()
 # Tier del modelo del analisis en vivo; compartido tkinter/asyncio igual que
 # modo_analisis (el selector de la ventana lo cambia en caliente).
 modelo_vivo = {"valor": "max"}
-# Prompts del negocio activo ({"nombre","ofertas","spin","cierre","completa",
-# "auditoria"}). Arranca con el ultimo negocio usado (o --negocio); la ventana
+# Prompts del negocio activo ({"nombre","ofertas","apertura","spin","cierre",
+# "completa","auditoria"}). Arranca con el ultimo negocio usado (o --negocio); la ventana
 # "Tu negocio" lo actualiza EN SITIO al guardar, sin reiniciar.
 prompts_activos = cargar_prompts()
 # Modo del asesor: "spin" (1a de 2 llamadas, indagacion), "cierre" (2a de 2:
@@ -194,8 +195,19 @@ def buscar_dispositivos(p: "pyaudio.PyAudio") -> tuple[dict | None, dict]:
     return microfono, loopback
 
 
+SEGUNDOS_COLA_AUDIO = 30  # audio que se guarda mientras se reconecta
+SEGUNDOS_SIN_RESPUESTA = 20  # enviando audio y Deepgram mudo: conexion zombi, se rehace
+CODIGOS_SIN_REINTENTO = (401, 402, 403)  # clave invalida o sin saldo: reintentar no sirve
+
+
 async def pipeline_audio(p, dispositivo, etiqueta, transcript, ui) -> None:
-    """Captura un dispositivo de audio y agrega sus frases al transcript."""
+    """Captura un dispositivo de audio y agrega sus frases al transcript.
+
+    Si Deepgram corta la conexion o internet parpadea, se reconecta solo: el
+    microfono/loopback sigue abierto y lo que se dijo mientras tanto queda en
+    cola y se transcribe al volver. (Antes un corte de un segundo apagaba la
+    escucha por el resto de la llamada.)
+    """
     rate = int(dispositivo["defaultSampleRate"])
     canales = min(int(dispositivo["maxInputChannels"]), 2)
     frames = int(rate * CHUNK_MS / 1000)
@@ -214,33 +226,92 @@ async def pipeline_audio(p, dispositivo, etiqueta, transcript, ui) -> None:
         input_device_index=dispositivo["index"],
     )
     loop = asyncio.get_running_loop()
+    cola: asyncio.Queue = asyncio.Queue(maxsize=SEGUNDOS_COLA_AUDIO * 1000 // CHUNK_MS)
+
+    async def lector():
+        # Unico que lee el dispositivo; vive toda la llamada, aparte de la
+        # conexion (dos lecturas a la vez sobre un stream tumban PortAudio).
+        while True:
+            datos = await loop.run_in_executor(
+                None, lambda: stream.read(frames, exception_on_overflow=False)
+            )
+            if canales == 2:
+                datos = audioop.tomono(datos, 2, 0.5, 0.5)
+            if cola.full():
+                cola.get_nowait()  # sin conexion hace rato: se suelta lo mas viejo
+            cola.put_nowait(datos)
+
+    pulso = {"ultimo": 0.0}  # ultima senal de vida de Deepgram en esta conexion
+
+    async def emisor(ws):
+        while True:
+            try:
+                datos = await asyncio.wait_for(cola.get(), timeout=5)
+            except asyncio.TimeoutError:
+                # El loopback no entrega nada si nada suena, y Deepgram cierra
+                # a los ~12 s sin recibir datos: este aviso la mantiene abierta.
+                await ws.send(json.dumps({"type": "KeepAlive"}))
+                pulso["ultimo"] = time.monotonic()  # sin audio no hay respuestas que esperar
+                continue
+            await ws.send(datos)
+            # Con audio entrando Deepgram responde cada ~4 s (aunque sea vacio).
+            if time.monotonic() - pulso["ultimo"] > SEGUNDOS_SIN_RESPUESTA:
+                raise TimeoutError("Deepgram dejó de responder con la conexión abierta")
+
+    async def receptor(ws):
+        async for mensaje in ws:
+            pulso["ultimo"] = time.monotonic()
+            msg = json.loads(mensaje)
+            if msg.get("type") != "Results":
+                continue
+            texto = msg["channel"]["alternatives"][0]["transcript"].strip()
+            if texto and msg.get("is_final"):
+                transcript.agregar(etiqueta, texto)
+                ui.put(("linea", f"{etiqueta}: {texto}"))
+
+    lectura = asyncio.ensure_future(lector())
+    espera = 1
     try:
-        async with websockets.connect(
-            url, additional_headers={"Authorization": f"Token {DEEPGRAM_API_KEY}"}
-        ) as ws:
-            ui.put(("estado", f"Escuchando ({etiqueta})"))
-
-            async def emisor():
-                while True:
-                    datos = await loop.run_in_executor(
-                        None, lambda: stream.read(frames, exception_on_overflow=False)
+        while True:
+            motivo = "Deepgram cerró la conexión"
+            inicio = time.monotonic()
+            try:
+                async with websockets.connect(
+                    url, additional_headers={"Authorization": f"Token {DEEPGRAM_API_KEY}"}
+                ) as ws:
+                    ui.put(("estado", f"Escuchando ({etiqueta})"))
+                    pulso["ultimo"] = time.monotonic()
+                    tareas = [asyncio.ensure_future(emisor(ws)),
+                              asyncio.ensure_future(receptor(ws))]
+                    try:
+                        await asyncio.wait(
+                            [*tareas, lectura], return_when=asyncio.FIRST_COMPLETED
+                        )
+                    finally:
+                        for tarea in tareas:
+                            tarea.cancel()
+                        fines = await asyncio.gather(*tareas, return_exceptions=True)
+                    if lectura.done():
+                        lectura.result()  # fallo el dispositivo de audio: sin arreglo aqui
+                    motivo = next(
+                        (repr(f) for f in fines
+                         if isinstance(f, Exception) and not isinstance(f, asyncio.CancelledError)),
+                        motivo,
                     )
-                    if canales == 2:
-                        datos = audioop.tomono(datos, 2, 0.5, 0.5)
-                    await ws.send(datos)
-
-            async def receptor():
-                async for mensaje in ws:
-                    msg = json.loads(mensaje)
-                    if msg.get("type") != "Results":
-                        continue
-                    texto = msg["channel"]["alternatives"][0]["transcript"].strip()
-                    if texto and msg.get("is_final"):
-                        transcript.agregar(etiqueta, texto)
-                        ui.put(("linea", f"{etiqueta}: {texto}"))
-
-            await asyncio.gather(emisor(), receptor())
+            except websockets.exceptions.InvalidStatus as e:
+                if e.response.status_code in CODIGOS_SIN_REINTENTO:
+                    raise
+                motivo = repr(e)
+            except (OSError, websockets.exceptions.WebSocketException) as e:
+                motivo = repr(e)
+            if time.monotonic() - inicio > 30:
+                espera = 1  # venia funcionando: es un corte nuevo, no un fallo en bucle
+            _log_error(f"Escucha ({etiqueta}) cortada, reconectando en {espera}s: {motivo}")
+            ui.put(("estado", f"Reconectando la escucha ({etiqueta})..."))
+            await asyncio.sleep(espera)
+            espera = min(espera * 2, 10)
     finally:
+        lectura.cancel()
         time.sleep(0.15)  # deja terminar la lectura de audio pendiente en el executor
         try:
             stream.stop_stream()
@@ -343,9 +414,8 @@ async def analizar_en_vivo(
         return await _analizar_glm(prompt, texto)
     # Los dos piensan por defecto y el razonamiento se comeria el max_tokens
     # (devolveria vacio). Sonnet 5 va sin razonamiento (asi se valido en el
-    # A/B). Opus 5 va con razonamiento minimo: apagarselo del todo puede colar
-    # etiquetas internas en la respuesta, y con esfuerzo "low" tarda lo mismo
-    # (~9 s medido con una llamada real).
+    # A/B). Opus 5.5 va con razonamiento minimo (en 5.5 no se puede apagar;
+    # esfuerzo "low" es el control): ~9-10 s medido con una llamada real.
     if tier == "economico":
         extra = {"thinking": {"type": "disabled"}}
     else:
@@ -413,6 +483,8 @@ def _explicar_error(e: Exception) -> str:
     bajo = texto.lower()
     if "credit balance" in bajo:
         return "tu cuenta de Anthropic no tiene créditos: recarga en console.anthropic.com → Billing"
+    if "http 402" in bajo:
+        return "tu cuenta de Deepgram se quedó sin saldo: recarga en console.deepgram.com"
     if "401" in texto or "authentication" in bajo or "invalid x-api-key" in bajo:
         servicio = "Deepgram" if "websocket" in bajo or "deepgram" in bajo else "Anthropic"
         return f"la clave de {servicio} no es válida: revísala en el archivo .env y vuelve a abrir"
@@ -461,15 +533,18 @@ def ejecutar_auditoria_claude_code(negocio: str = NEGOCIO_DEFECTO) -> Path:
 async def ejecutar_auditoria(client: AsyncAnthropic, texto_llamada: str) -> str:
     """Audita la llamada completa via API (respaldo con costo si falla Claude Code).
 
-    Opus 4.8 con effort "max" + razonamiento adaptativo = la respuesta mas
-    inteligente que da el modelo (tarda varios minutos). Streaming obligatorio:
-    con max_tokens alto una peticion sin streaming se corta por timeout del SDK.
+    Opus 5.5 con razonamiento adaptativo y effort "high" (~4 min, probado el
+    2026-09-23 con una llamada real de 94K chars: informe de 4.400 palabras).
+    OJO: con effort "max" 5.5 se gasta los 64K tokens de salida pensando y no
+    escribe nada (10 min perdidos, stop_reason max_tokens). Streaming
+    obligatorio: con max_tokens alto una peticion sin streaming se corta por
+    timeout del SDK.
     """
     async with client.messages.stream(
         model=MODELO,
         max_tokens=64000,
         thinking={"type": "adaptive"},
-        output_config={"effort": "max"},
+        output_config={"effort": "high"},
         system=prompts_activos["auditoria"],
         messages=[
             {
@@ -480,7 +555,14 @@ async def ejecutar_auditoria(client: AsyncAnthropic, texto_llamada: str) -> str:
         ],
     ) as stream:
         respuesta = await stream.get_final_message()
-    return next(b.text for b in respuesta.content if b.type == "text")
+    if respuesta.stop_reason == "refusal":
+        raise RuntimeError("el modelo declinó auditar esta llamada")
+    texto = "".join(b.text for b in respuesta.content if b.type == "text")
+    if not texto.strip():
+        raise RuntimeError(
+            f"el modelo no devolvió texto (motivo de parada: {respuesta.stop_reason})"
+        )
+    return texto
 
 
 async def auditor(transcript, ui) -> None:
@@ -599,6 +681,7 @@ COLORES = {
 FUENTE_ETIQUETA = ("Bahnschrift SemiCondensed", 10)
 FUENTE_FASE = ("Bahnschrift SemiBold SemiConden", 10)
 FUENTE_PRINCIPAL = ("Segoe UI Variable Display Semib", 15)
+FUENTE_GUION = ("Segoe UI Variable Text Semibold", 11)  # guiones largos de la apertura
 FUENTE_TEXTO = ("Segoe UI Variable Text", 11)
 FUENTE_CHICA = ("Segoe UI Variable Text", 9)
 FUENTE_NEGRITA = ("Segoe UI Variable Text Semibold", 10)
@@ -619,7 +702,7 @@ FASES_UI = {
 }
 CAMPOS_SUGERENCIA = (
     "FASE ACTUAL", "MOMENTO", "AVATAR", "DOLORES DETECTADOS", "OBJECION",
-    "SENAL DE COMPRA",
+    "SENAL DE COMPRA", "APERTURA PENDIENTE",
 )
 
 
@@ -649,6 +732,14 @@ def _parsear_sugerencia(texto: str) -> tuple[dict, list[str]]:
     return campos, preguntas
 
 
+def _pasos_pendientes(valor: str | None, total: int) -> set[int] | None:
+    """Pasos de la apertura que el modelo dio por pendientes ("2, 3" -> {2, 3};
+    "nada" -> vacio). None si la respuesta no trajo el campo."""
+    if valor is None:
+        return None
+    return {int(n) for n in re.findall(r"\d+", valor) if 1 <= int(n) <= total}
+
+
 def _es_vacio(valor: str | None) -> bool:
     """True si el modelo dijo "ninguno", "ninguna aún", "aún no claro"..."""
     if valor is None:
@@ -674,6 +765,7 @@ def modo_ventana(intervalo: int, arrancar_nucleo: bool = True):
         except Exception as e:  # noqa: BLE001 — sin esto la ventana queda en "Iniciando..."
             _log_error(f"La escucha se detuvo: {e!r}")
             ui.put(("estado", f"Error, la escucha se detuvo: {_explicar_error(e)}"))
+            ui.put(("detenido", _explicar_error(e)))
 
     if arrancar_nucleo:
         threading.Thread(target=correr_nucleo, daemon=True).start()
@@ -761,6 +853,9 @@ def modo_ventana(intervalo: int, arrancar_nucleo: bool = True):
     def aplicar_modo(valor):
         modo_analisis["valor"] = valor
         pintar_fases(None)
+        pintar_apertura()
+        if not apertura["hay_sugerencia"]:
+            pintar_inicio()
         forzar_analisis.set()  # re-analiza ya con el cerebro del modo nuevo
 
     def fila_modo(rotulo, opciones, valor, al_cambiar):
@@ -824,6 +919,57 @@ def modo_ventana(intervalo: int, arrancar_nucleo: bool = True):
 
     pintar_fases(None)
 
+    # --- apertura: lo que se dice al arrancar (y se suele olvidar) -------
+    # pendientes: None = aun sin analisis (falta todo); luego, lo que diga el
+    # modelo en APERTURA PENDIENTE.
+    apertura = {"pendientes": None, "hay_sugerencia": False}
+    marco_apertura = tk.Frame(raiz, bg=C["fondo"])
+
+    def pasos_apertura() -> list[tuple[str, str]]:
+        """(titulo, guion) de la apertura del negocio; no aplica en el cierre."""
+        if modo_analisis["valor"] == "cierre":
+            return []
+        return prompts_activos.get("apertura") or []
+
+    def pintar_apertura():
+        for w in marco_apertura.winfo_children():
+            w.destroy()
+        pasos = pasos_apertura()
+        if not pasos:
+            marco_apertura.pack_forget()
+            return
+        marco_apertura.pack(fill="x", padx=px(14), pady=(px(10), px(0)), before=marco_fases)
+        tk.Label(marco_apertura, text="Apertura", width=9, anchor="w", bg=C["fondo"],
+                 fg=C["tenue"], font=FUENTE_ETIQUETA).pack(side="left")
+        pendientes = apertura["pendientes"]
+        for n, (titulo, _guion) in enumerate(pasos, start=1):
+            falta = pendientes is None or n in pendientes
+            chip = tk.Label(
+                marco_apertura, text=("○  " if falta else "✓  ") + titulo,
+                bg=C["ambar_fondo"] if falta else C["superficie"],
+                fg=C["ambar"] if falta else C["tenue"],
+                font=FUENTE_ETIQUETA, padx=px(6), pady=px(4), cursor="hand2",
+            )
+            chip.pack(side="left", fill="x", expand=True, padx=(0 if n == 1 else px(4), 0))
+            # clic = ver el guion de ese paso (para decirlo aunque ya paso su momento)
+            chip.bind("<Button-1>", lambda _e, n=n: escribir_sugerencia(bloques_guion([n])))
+
+    def bloques_guion(numeros, primera=True) -> list[tuple[str, tuple | str]]:
+        """Guiones de la apertura para leer: el primero en grande, el resto debajo."""
+        pasos = pasos_apertura()
+        b: list[tuple[str, tuple | str]] = []
+        for i, n in enumerate(numeros):
+            titulo, guion = pasos[n - 1]
+            if i == 0:
+                b += [(f"Apertura: {titulo.lower()}\n",
+                       ("etiqueta", "primera") if primera else "etiqueta"),
+                      (guion + "\n", "guion")]
+            else:
+                if i == 1:
+                    b.append(("Y después\n", "etiqueta"))
+                b += [(titulo + "\n", "paso_titulo"), (guion + "\n", "paso_texto")]
+        return b
+
     # --- tarjeta de la sugerencia --------------------------------------
     # height chico a proposito: la tarjeta se estira con expand=True y asi no
     # le roba el espacio a la transcripcion cuando la ventana es baja.
@@ -840,6 +986,13 @@ def modo_ventana(intervalo: int, arrancar_nucleo: bool = True):
         lmargin1=px(12), lmargin2=px(12), rmargin=px(12), lmargincolor=C["ambar_fondo"],
         spacing1=px(10), spacing3=px(10), spacing2=px(3),
     )
+    t.tag_configure(
+        "guion", font=FUENTE_GUION, foreground=C["ambar"], background=C["ambar_fondo"],
+        lmargin1=px(12), lmargin2=px(12), rmargin=px(12), lmargincolor=C["ambar_fondo"],
+        spacing1=px(7), spacing3=px(7), spacing2=px(2),
+    )
+    t.tag_configure("paso_titulo", font=FUENTE_NEGRITA, foreground=C["tenue"], spacing1=px(6))
+    t.tag_configure("paso_texto", foreground=C["texto"], spacing1=px(2), spacing3=px(4))
     t.tag_configure("alterna", foreground=C["texto"], lmargin2=px(22), spacing1=px(5))
     t.tag_configure("num", foreground=C["apagado"])
     t.tag_configure("dolor", foreground=C["texto"], lmargin2=px(18), spacing1=px(3))
@@ -867,19 +1020,38 @@ def modo_ventana(intervalo: int, arrancar_nucleo: bool = True):
         if not preguntas:  # el modelo se salio del formato: mostrarlo tal cual
             escribir_sugerencia([(texto, "dato")])
             return
-        pintar_fases(campos.get("FASE ACTUAL") or campos.get("MOMENTO"))
+        fase = campos.get("FASE ACTUAL") or campos.get("MOMENTO")
+        pintar_fases(fase)
+        pasos = pasos_apertura()
+        pendientes = _pasos_pendientes(campos.get("APERTURA PENDIENTE"), len(pasos))
+        if pasos and pendientes is not None:
+            apertura["pendientes"] = pendientes
+            pintar_apertura()
+        apertura["hay_sugerencia"] = True
+        en_apertura = bool(pasos and pendientes) and _sin_tildes(fase or "").lower().startswith("apert")
         b: list[tuple[str, tuple | str]] = []
         senal = campos.get("SENAL DE COMPRA")
         if not _es_vacio(senal):
             b += [("Señal de compra\n", "senal_titulo"), (senal + "\n", "senal_texto"),
                   ("\n", "separa")]
-        b += [(rotulo_principal[modo_analisis["valor"]] + "\n",
-               "etiqueta" if b else ("etiqueta", "primera")),
-              (preguntas[0] + "\n", "principal")]
-        if len(preguntas) > 1:
-            b.append(("Otras opciones\n", "etiqueta"))
-            for i, p in enumerate(preguntas[1:], start=2):
-                b += [(f"{i}.   ", ("alterna", "num")), (p + "\n", "alterna")]
+        if en_apertura:
+            # Arrancando la llamada: manda el guion completo de los pasos que
+            # faltan. Las primeras lineas del modelo son esos mismos pasos
+            # resumidos; solo se muestran las que vienen despues.
+            b += bloques_guion(sorted(pendientes), primera=not b)
+            siguientes = preguntas[len(pendientes):]
+            if siguientes:
+                b.append(("Luego sigue con\n", "etiqueta"))
+                for p in siguientes:
+                    b += [("●  ", ("alterna", "num")), (p + "\n", "alterna")]
+        else:
+            b += [(rotulo_principal[modo_analisis["valor"]] + "\n",
+                   "etiqueta" if b else ("etiqueta", "primera")),
+                  (preguntas[0] + "\n", "principal")]
+            if len(preguntas) > 1:
+                b.append(("Otras opciones\n", "etiqueta"))
+                for i, p in enumerate(preguntas[1:], start=2):
+                    b += [(f"{i}.   ", ("alterna", "num")), (p + "\n", "alterna")]
         objecion = campos.get("OBJECION")
         if not _es_vacio(objecion):
             nombre, flecha_obj, respuesta = objecion.partition("→")
@@ -902,11 +1074,20 @@ def modo_ventana(intervalo: int, arrancar_nucleo: bool = True):
             b.append(("Aún no está claro\n", "vacio") if _es_vacio(avatar) else (avatar + "\n", "dato"))
         escribir_sugerencia(b)
 
-    escribir_sugerencia([
-        ("Esperando la conversación\n", ("etiqueta", "primera")),
-        ("Cuando el prospecto empiece a hablar, aquí aparece la próxima "
-         "pregunta. Si la quieres ya, pulsa Analizar ahora o F5.\n", "vacio"),
-    ])
+    def pintar_inicio():
+        """Antes del primer analisis: la apertura lista para leer (si el negocio la tiene)."""
+        pasos = pasos_apertura()
+        if pasos:
+            escribir_sugerencia(bloques_guion(range(1, len(pasos) + 1)))
+            return
+        escribir_sugerencia([
+            ("Esperando la conversación\n", ("etiqueta", "primera")),
+            ("Cuando el prospecto empiece a hablar, aquí aparece la próxima "
+             "pregunta. Si la quieres ya, pulsa Analizar ahora o F5.\n", "vacio"),
+        ])
+
+    pintar_apertura()
+    pintar_inicio()
 
     # --- acciones --------------------------------------------------------
     acciones = tk.Frame(raiz, bg=C["fondo"])
@@ -997,6 +1178,9 @@ def modo_ventana(intervalo: int, arrancar_nucleo: bool = True):
         guardar_preferencias(negocio=nombre)
         pintar_negocio()
         armar_fila_vender()
+        pintar_apertura()
+        if not apertura["hay_sugerencia"]:
+            pintar_inicio()
         forzar_analisis.set()
 
     def abrir_negocio(_e=None, empezar_nuevo=False):
@@ -1054,7 +1238,7 @@ def modo_ventana(intervalo: int, arrancar_nucleo: bool = True):
         bajo = texto.lower()
         if bajo.startswith("error") or "falló" in bajo or "sin micro" in bajo:
             color = C["coral"]
-        elif bajo.startswith(("analizando", "auditando", "iniciando")):
+        elif bajo.startswith(("analizando", "auditando", "iniciando", "reconectando")):
             color = C["ambar"]
         else:
             color = C["verde"]
@@ -1073,6 +1257,14 @@ def modo_ventana(intervalo: int, arrancar_nucleo: bool = True):
                 pintar_sugerencia(contenido)
             elif tipo == "estado":
                 pintar_estado(contenido)
+            elif tipo == "detenido":
+                # Fallo sin arreglo automatico: que se vea en grande, no solo
+                # en la linea de estado (en plena llamada pasa inadvertida).
+                escribir_sugerencia([
+                    ("El copiloto dejó de escuchar\n", "obj_titulo"),
+                    (f"Ciérralo y vuelve a abrirlo para seguir. Motivo: {contenido}\n",
+                     "obj_texto"),
+                ])
         raiz.after(200, refrescar)
 
     refrescar()

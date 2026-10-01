@@ -130,7 +130,7 @@ Las transcripciones y auditorías se guardan solas en `copiloto-spin/llamadas/`
 | Servicio | Costo | Nota |
 |---|---|---|
 | Deepgram (transcripción) | ~$0.92/hora | los $200 gratis dan ~200 horas |
-| Claude modelo **Máx** (Opus 5) | ~$3/hora | el mejor; es el defecto |
+| Claude modelo **Máx** (Opus 5.5) | ~$2.50/hora | el mejor; es el defecto |
 | Claude modelo **Económico** (Sonnet 5) | ~$1.20-1.80/hora | casi igual de bueno |
 
 Los dos usan la misma clave de Anthropic. El modelo se cambia en vivo en

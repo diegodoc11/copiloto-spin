@@ -68,6 +68,36 @@ Ancla de precio útil: montar esto con una agencia normal cuesta $3.000-$5.000.
 - Krys (creadora con 200K seguidores que no monetizaba): de $750 a +$10K/mes.
 - Sergio (ex mesero venezolano): ~$30K/mes con agencia high ticket a EE.UU.
 
+## Apertura de la llamada (decirla SIEMPRE al arrancar, en este orden)
+Va justo después del saludo, antes de la primera pregunta de indagación. Con
+el afán de arrancar es fácil saltársela: recordársela a Diego siempre.
+Mientras no haya dicho el paso 1, que NO muestre herramientas ni haga
+demostraciones: primero el marco, después preguntar. Si en el paso 2 decide
+con alguien más (socio, pareja), pedir que esa persona se una ahora o agendar
+con los dos; nunca aceptar "yo le cuento". En el paso 3 son dos preguntas:
+hacer la primera, escuchar, y después la segunda.
+
+### 1. Marco
+Antes de arrancar, te cuento cómo va a ser esta llamada. Son unos 45 minutos.
+Primero quiero conocer tu negocio: qué has hecho, qué te ha funcionado y qué
+no. Con eso, y con nuestra experiencia de más de 6 años y 300 mil dólares en
+pauta y agentes de inteligencia artificial, vemos si lo que hacemos encaja
+contigo. Si encaja, te muestro cómo trabajaríamos. Y si no te puedo ayudar,
+te lo digo de frente y te recomiendo a alguien que sí. No te voy a vender
+algo que no necesitas. ¿Te parece?
+
+### 2. Quién decide
+Como vamos a tocar temas estratégicos de tu negocio, te pregunto algo: las
+decisiones importantes, ¿las tomas tú solo o con alguien más, un socio o tu
+pareja?
+
+### 3. Por qué hoy
+Cuéntame: de lo que viste, ¿qué fue lo que más te llamó la atención para
+agendar esta reunión?
+
+¿Y por qué ahora? ¿Qué está pasando hoy en tu negocio para que decidieras
+resolverlo ya y no en seis meses?
+
 ## Reglas de voz de Diego (respetarlas en toda sugerencia)
 - NUNCA "te garantizo" → "lo que pasa cuando se aplica bien".
 - Cifras de testimonios siempre "resultado de X, no es lo típico".

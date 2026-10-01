@@ -29,6 +29,21 @@ en 2-3 líneas: años de experiencia, resultados propios, seguidores, etc.].
 - [Nombre/caso]: [resultado concreto con cifras]. (Siempre presentarla como
   "resultado de X, no es lo típico".)
 
+## Apertura de la llamada (opcional; lo que dices SIEMPRE al arrancar)
+[El copiloto te muestra estos guiones al empezar la llamada y te avisa cuáles
+te faltan. Un paso por cada "### N. Título" (título corto); debajo, el guion
+tal cual lo dirías. Si no usas apertura, borra la sección.]
+
+### 1. Marco
+[Cómo va a ser la llamada: cuánto dura, qué van a revisar y qué pasa al final
+si encaja y si no encaja. Termina con "¿te parece?".]
+
+### 2. Quién decide
+[La pregunta para saber si decide solo o con alguien más (socio, pareja).]
+
+### 3. Por qué hoy
+[La pregunta de qué lo motivó a agendar y por qué ahora.]
+
 ## Reglas de voz del vendedor (cómo hablas tú; el copiloto las respeta)
 - [Ej: nunca prometer resultados garantizados.]
 - [Ej: tuteo/usted, muletillas a evitar, palabras prohibidas.]
